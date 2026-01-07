@@ -20,20 +20,19 @@ import (
 	"github.com/pushchain/push-validator-cli/internal/validator"
 )
 
-
 // keyMap defines keyboard shortcuts
 type keyMap struct {
-	Quit       key.Binding
-	Refresh    key.Binding
-	Help       key.Binding
-	Up         key.Binding
-	Down       key.Binding
-	Left       key.Binding
-	Right      key.Binding
-	Search     key.Binding
-	Follow     key.Binding
-	Home       key.Binding
-	End        key.Binding
+	Quit    key.Binding
+	Refresh key.Binding
+	Help    key.Binding
+	Up      key.Binding
+	Down    key.Binding
+	Left    key.Binding
+	Right   key.Binding
+	Search  key.Binding
+	Follow  key.Binding
+	Home    key.Binding
+	End     key.Binding
 }
 
 // ShortHelp implements help.KeyMap for inline help
@@ -140,10 +139,10 @@ type Dashboard struct {
 func New(opts Options) *Dashboard {
 	// Apply sensible defaults to prevent zero-value bugs
 	if opts.RefreshInterval <= 0 {
-		opts.RefreshInterval = 2 * time.Second
+		opts.RefreshInterval = 1 * time.Second
 	}
 	if opts.RPCTimeout <= 0 {
-		rt := 15 * time.Second
+		rt := 5 * time.Second
 		if 2*opts.RefreshInterval < rt {
 			rt = 2 * opts.RefreshInterval
 		}
@@ -223,7 +222,12 @@ func (m *Dashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// CRITICAL: Only tickMsg schedules next tick (prevents double ticker)
 		// IMPORTANT: Only fetch if no fetch is currently in progress
 		// Otherwise the new fetch will cancel the previous one
-		cmds := []tea.Cmd{tickCmd(m.opts.RefreshInterval)}
+		// Adaptive refresh: faster when syncing, slower when in-sync
+		interval := m.opts.RefreshInterval
+		if !m.data.Metrics.Chain.CatchingUp && !m.lastOK.IsZero() {
+			interval = 5 * time.Second // Slower when synced
+		}
+		cmds := []tea.Cmd{tickCmd(interval)}
 		if m.fetchCancel == nil {
 			// No fetch in progress, safe to start a new one
 			cmds = append(cmds, m.fetchCmd())
@@ -372,16 +376,16 @@ func (m *Dashboard) View() string {
 
 		var rowCells []string
 		for _, cell := range cells {
-            if comp := m.registry.Get(cell.ID); comp != nil {
-                s := comp.View(cell.W, cell.H)
-                rowCells = append(rowCells, s)
-            }
+			if comp := m.registry.Get(cell.ID); comp != nil {
+				s := comp.View(cell.W, cell.H)
+				rowCells = append(rowCells, s)
+			}
 		}
 
-        if len(rowCells) > 0 {
-            joined := lipgloss.JoinHorizontal(lipgloss.Top, rowCells...)
-            rows = append(rows, joined)
-        }
+		if len(rowCells) > 0 {
+			joined := lipgloss.JoinHorizontal(lipgloss.Top, rowCells...)
+			rows = append(rows, joined)
+		}
 	}
 
 	// Join all rows WITHOUT any spacer
@@ -606,15 +610,15 @@ func (m *Dashboard) fetchData(ctx context.Context) (DashboardData, error) {
 		// Convert validator.ValidatorInfo to dashboard format
 		data.NetworkValidators.Total = valList.Total
 		data.NetworkValidators.Validators = make([]struct {
-			Moniker              string
-			Status               string
-			VotingPower          int64
-			Commission           string
-			CommissionRewards    string // Accumulated commission rewards
-			OutstandingRewards   string // Total outstanding rewards
-			Address              string // Cosmos address (pushvaloper...)
-			EVMAddress           string // EVM address (0x...)
-			Jailed               bool   // Whether validator is jailed
+			Moniker            string
+			Status             string
+			VotingPower        int64
+			Commission         string
+			CommissionRewards  string // Accumulated commission rewards
+			OutstandingRewards string // Total outstanding rewards
+			Address            string // Cosmos address (pushvaloper...)
+			EVMAddress         string // EVM address (0x...)
+			Jailed             bool   // Whether validator is jailed
 		}, len(valList.Validators))
 
 		for i, v := range valList.Validators {

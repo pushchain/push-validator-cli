@@ -79,7 +79,7 @@ func Run(ctx context.Context, opts Options) error {
 		defer close(phase1Done)
 		lastEvent := time.Now()
 		sawSnapshot = false
-		ticker := time.NewTicker(120 * time.Millisecond)
+		ticker := time.NewTicker(80 * time.Millisecond)
 		defer ticker.Stop()
 
 		steps := []string{
@@ -181,8 +181,8 @@ func Run(ctx context.Context, opts Options) error {
 						fmt.Fprintf(opts.Out, "\r\033[K%s %c", line, spinnerFrames[spinnerIndex])
 					}
 				}
-				// Smart completion: if Step 3 stuck with no new logs for 3s, check RPC
-				if currentStep == 3 && sawSnapshot && time.Since(lastEvent) > 3*time.Second {
+				// Smart completion: if Step 3 stuck with no new logs for 2s, check RPC
+				if currentStep == 3 && sawSnapshot && time.Since(lastEvent) > 2*time.Second {
 					if isSyncedQuick(opts.LocalRPC) {
 						currentStep = maxStep
 						sawAccepted = true
@@ -373,16 +373,16 @@ func Run(ctx context.Context, opts Options) error {
 			}
 			// Compute moving rate from recent headers and derive ETA string.
 			rate, eta := progressRateAndETA(buf, cur, lastRemote)
-			// Periodically refresh peers and remote latency (every ~5s)
-			if time.Since(lastMetricsAt) > 5*time.Second {
+			// Periodically refresh peers and remote latency (every ~3s)
+			if time.Since(lastMetricsAt) > 3*time.Second {
 				lastMetricsAt = time.Now()
-				ctxp, cancelp := context.WithTimeout(context.Background(), 1200*time.Millisecond)
+				ctxp, cancelp := context.WithTimeout(context.Background(), 800*time.Millisecond)
 				if plist, err := cli.Peers(ctxp); err == nil {
 					lastPeers = len(plist)
 				}
 				cancelp()
 				t0 := time.Now()
-				ctxl, cancell := context.WithTimeout(context.Background(), 1200*time.Millisecond)
+				ctxl, cancell := context.WithTimeout(context.Background(), 800*time.Millisecond)
 				_, _ = remoteCli.RemoteStatus(ctxl, remote)
 				cancell()
 				lastLatency = time.Since(t0).Milliseconds()
@@ -426,7 +426,7 @@ func Run(ctx context.Context, opts Options) error {
 				return ErrSyncStuck
 			}
 			// Completion check via local status (cheap)
-			ctx2, cancel2 := context.WithTimeout(context.Background(), 1200*time.Millisecond)
+			ctx2, cancel2 := context.WithTimeout(context.Background(), 800*time.Millisecond)
 			st, err := cli.Status(ctx2)
 			cancel2()
 			if err == nil {
@@ -729,7 +729,7 @@ func tailStatesync(ctx context.Context, path string, out chan<- string, stop <-c
 		line, err := r.ReadString('\n')
 		if err != nil {
 			if err == io.EOF {
-				time.Sleep(100 * time.Millisecond)
+				time.Sleep(50 * time.Millisecond)
 				continue
 			}
 			return
@@ -757,7 +757,7 @@ func isSyncedQuick(local string) bool {
 		local = "http://127.0.0.1:26657"
 	}
 	httpc := &http.Client{Timeout: 1200 * time.Millisecond}
-	ctx, cancel := context.WithTimeout(context.Background(), 1200*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 800*time.Millisecond)
 	defer cancel()
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, local+"/status", nil)
 	resp, err := httpc.Do(req)
@@ -834,7 +834,7 @@ func probeRemoteOnce(base string, fallback int64) int64 {
 		return fallback
 	}
 	httpc := &http.Client{Timeout: 1200 * time.Millisecond}
-	ctx, cancel := context.WithTimeout(context.Background(), 1200*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 800*time.Millisecond)
 	defer cancel()
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, base+"/status", nil)
 	resp, err := httpc.Do(req)

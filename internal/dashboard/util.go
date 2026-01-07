@@ -261,7 +261,7 @@ type ETACalculator struct {
 
 // NewETACalculator creates a new ETA calculator
 func NewETACalculator() *ETACalculator {
-	return &ETACalculator{maxSamples: 10}
+	return &ETACalculator{maxSamples: 20}
 }
 
 // AddSample adds a new sample point
