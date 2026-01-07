@@ -91,6 +91,9 @@ func init() {
 		c.EmojiEnabled = c.EmojiEnabled && !flagNoEmoji
 		w := os.Stdout
 
+		// Fixed column width for command alignment (longest command + buffer)
+		const cmdWidth = 36
+
 		// Header
 		fmt.Fprintln(w, c.Header(" Push Validator "))
 		fmt.Fprintln(w, c.Description("Manage a Push Chain validator node: init, start, status, sync, and admin tasks."))
@@ -104,40 +107,40 @@ func init() {
 
 		// Quick Start
 		fmt.Fprintln(w, c.SubHeader("Quick Start"))
-		fmt.Fprintln(w, c.FormatCommand("push-validator start", "Start the node process"))
-		fmt.Fprintln(w, c.FormatCommand("push-validator status", "Show node/rpc/sync status"))
-		fmt.Fprintln(w, c.FormatCommand("push-validator dashboard", "Live dashboard with metrics"))
+		fmt.Fprintln(w, c.FormatCommandAligned("start", "Start the node process", cmdWidth))
+		fmt.Fprintln(w, c.FormatCommandAligned("status", "Show node/rpc/sync status", cmdWidth))
+		fmt.Fprintln(w, c.FormatCommandAligned("dashboard", "Live dashboard with metrics", cmdWidth))
 		fmt.Fprintln(w)
 
 		// Operations
 		fmt.Fprintln(w, c.SubHeader("Operations"))
-		fmt.Fprintln(w, c.FormatCommand("push-validator stop", "Stop the node process"))
-		fmt.Fprintln(w, c.FormatCommand("push-validator restart", "Restart the node process"))
-		fmt.Fprintln(w, c.FormatCommand("push-validator logs", "Tail node logs"))
+		fmt.Fprintln(w, c.FormatCommandAligned("stop", "Stop the node process", cmdWidth))
+		fmt.Fprintln(w, c.FormatCommandAligned("restart", "Restart the node process", cmdWidth))
+		fmt.Fprintln(w, c.FormatCommandAligned("logs", "Tail node logs", cmdWidth))
 		fmt.Fprintln(w)
 
 		// Validator
 		fmt.Fprintln(w, c.SubHeader("Validator"))
-		fmt.Fprintln(w, c.FormatCommand("push-validator validators", "List validators (default pretty, --output json)"))
-		fmt.Fprintln(w, c.FormatCommand("push-validator balance [address]", "Check account balance (defaults to KEY_NAME)"))
-		fmt.Fprintln(w, c.FormatCommand("push-validator register-validator", "Register this node as a validator"))
-		fmt.Fprintln(w, c.FormatCommand("push-validator increase-stake", "Increase validator stake"))
-		fmt.Fprintln(w, c.FormatCommand("push-validator unjail", "Restore jailed validator to active status"))
-		fmt.Fprintln(w, c.FormatCommand("push-validator withdraw-rewards", "Withdraw validator rewards and commission"))
-		fmt.Fprintln(w, c.FormatCommand("push-validator restake-rewards", "Withdraw and restake all rewards"))
+		fmt.Fprintln(w, c.FormatCommandAligned("validators", "List validators", cmdWidth))
+		fmt.Fprintln(w, c.FormatCommandAligned("balance [address]", "Check account balance", cmdWidth))
+		fmt.Fprintln(w, c.FormatCommandAligned("register-validator", "Register this node as a validator", cmdWidth))
+		fmt.Fprintln(w, c.FormatCommandAligned("increase-stake", "Increase validator stake", cmdWidth))
+		fmt.Fprintln(w, c.FormatCommandAligned("unjail", "Restore jailed validator to active status", cmdWidth))
+		fmt.Fprintln(w, c.FormatCommandAligned("withdraw-rewards", "Withdraw rewards and commission", cmdWidth))
+		fmt.Fprintln(w, c.FormatCommandAligned("restake-rewards", "Withdraw and restake all rewards", cmdWidth))
 		fmt.Fprintln(w)
 
 		// Maintenance
 		fmt.Fprintln(w, c.SubHeader("Maintenance"))
-		fmt.Fprintln(w, c.FormatCommand("push-validator backup", "Create config/state backup archive"))
-		fmt.Fprintln(w, c.FormatCommand("push-validator reset", "Reset chain data (keeps addr book)"))
-		fmt.Fprintln(w, c.FormatCommand("push-validator full-reset", "⚠️  Complete reset (deletes ALL keys and data)"))
+		fmt.Fprintln(w, c.FormatCommandAligned("backup", "Create config/state backup archive", cmdWidth))
+		fmt.Fprintln(w, c.FormatCommandAligned("reset", "Reset chain data (keeps addr book)", cmdWidth))
+		fmt.Fprintln(w, c.FormatCommandAligned("full-reset", "Complete reset (deletes ALL data)", cmdWidth))
 		fmt.Fprintln(w)
 
 		// Utilities
 		fmt.Fprintln(w, c.SubHeader("Utilities"))
-		fmt.Fprintln(w, c.FormatCommand("push-validator doctor", "Run diagnostic checks"))
-		fmt.Fprintln(w, c.FormatCommand("push-validator peers", "Show connected peer information"))
+		fmt.Fprintln(w, c.FormatCommandAligned("doctor", "Run diagnostic checks", cmdWidth))
+		fmt.Fprintln(w, c.FormatCommandAligned("peers", "Show connected peer information", cmdWidth))
 		fmt.Fprintln(w)
 	})
 

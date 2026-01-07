@@ -211,6 +211,17 @@ func (c *ColorConfig) FormatCommand(cmd, desc string) string {
 	return fmt.Sprintf("  %s  %s", c.Command(cmd), c.Description(desc))
 }
 
+// FormatCommandAligned formats a command with its description using fixed-width alignment
+// cmdWidth is the column width for the command (description starts after this)
+func (c *ColorConfig) FormatCommandAligned(cmd, desc string, cmdWidth int) string {
+	// Pad the command to fixed width
+	padding := cmdWidth - len(cmd)
+	if padding < 2 {
+		padding = 2
+	}
+	return fmt.Sprintf("  %s%s%s", c.Command(cmd), strings.Repeat(" ", padding), c.Description(desc))
+}
+
 // FormatFlag formats a flag with its description
 func (c *ColorConfig) FormatFlag(flag, desc string) string {
 	return fmt.Sprintf("  %s  %s", c.Flag(flag), c.Description(desc))
