@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
 # Push Validator Manager (Go) — Installer with local/clone build + guided start
+#
+# This script installs the Push Validator Manager from push-validator-cli repo
+# and builds the pchaind binary from the push-chain-node repo.
+#
 # Examples:
 #   bash install.sh                            # default: reset data, build if needed, init+start, wait for sync
 #   bash install.sh --no-reset --no-start      # install only
-#   bash install.sh --use-local                # use current repo checkout to build
-#   PNM_REF=v1.0.0 bash install.sh             # clone specific ref (branch/tag)
+#   bash install.sh --use-local                # use current repo checkout to build manager
+#   PNM_REF=v1.0.0 bash install.sh             # clone specific ref for push-validator-cli
+#   PCHAIN_REF=v1.0.0 bash install.sh          # clone specific ref for push-chain-node
 
 set -euo pipefail
 IFS=$'\n\t'
@@ -421,6 +426,7 @@ SNAPSHOT_RPC="${SNAPSHOT_RPC:-https://rpc-testnet-donut-node2.push.org}"
 RESET_DATA="${RESET_DATA:-yes}"
 AUTO_START="${AUTO_START:-yes}"
 PNM_REF="${PNM_REF:-main}"
+PCHAIN_REF="${PCHAIN_REF:-main}"
 BIN_DIR="${BIN_DIR:-$HOME/.local/bin}"
 PREFIX="${PREFIX:-}"
 
@@ -428,7 +434,6 @@ PREFIX="${PREFIX:-}"
 USE_LOCAL="no"
 LOCAL_REPO=""
 PCHAIND="${PCHAIND:-}"
-PCHAIND_REF="${PCHAIND_REF:-}"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --no-start) AUTO_START="no"; shift ;;
@@ -444,7 +449,8 @@ while [[ $# -gt 0 ]]; do
     --keyring) KEYRING_BACKEND="$2"; shift 2 ;;
     --chain-id) CHAIN_ID="$2"; shift 2 ;;
     --snapshot-rpc) SNAPSHOT_RPC="$2"; shift 2 ;;
-    --pchaind-ref) PCHAIND_REF="$2"; shift 2 ;;
+    --pchaind-ref) PCHAIN_REF="$2"; shift 2 ;;  # deprecated, use --pchain-ref
+    --pchain-ref) PCHAIN_REF="$2"; shift 2 ;;
     --use-local) USE_LOCAL="yes"; shift ;;
     --local-repo) LOCAL_REPO="$2"; shift 2 ;;
     --help)
@@ -466,7 +472,8 @@ while [[ $# -gt 0 ]]; do
       echo "  --keyring BACKEND    Keyring backend (default: test)"
       echo
       echo "Build Options:"
-      echo "  --pchaind-ref REF    Build pchaind from specific git ref/branch/tag"
+      echo "  --pchain-ref REF     Git ref for push-chain-node repo (default: main)"
+      echo "  --pchaind-ref REF    (deprecated) Alias for --pchain-ref"
       echo
       echo "Behavior Options:"
       echo "  --reset              Reset all data (default)"
@@ -481,14 +488,14 @@ while [[ $# -gt 0 ]]; do
       echo "Environment Variables:"
       echo "  NO_COLOR             Set to disable colors"
       echo "  VERBOSE              Set to 'yes' for verbose output"
-      echo "  PNM_REF              Git ref for push-validator-manager (default: main)"
-      echo "  PCHAIND_REF          Git ref for pchaind binary"
+      echo "  PNM_REF              Git ref for push-validator-cli (default: main)"
+      echo "  PCHAIN_REF           Git ref for push-chain-node (default: main)"
       echo
       echo "Examples:"
       echo "  bash install.sh --use-local --verbose"
       echo "  bash install.sh --no-reset --no-start"
       echo "  bash install.sh --bin-dir /usr/local/bin --prefix /opt/pchain"
-      echo "  PNM_REF=main bash install.sh"
+      echo "  PNM_REF=v1.0.0 PCHAIN_REF=main bash install.sh"
       exit 0
       ;;
     *) err "Unknown flag: $1 (use --help for usage)"; exit 2 ;;
@@ -506,6 +513,7 @@ else
   HOME_DIR="${HOME_DIR:-$HOME/.pchain}"
 fi
 REPO_DIR="$ROOT_DIR/repo"
+PCHAIN_REPO_DIR="$ROOT_DIR/push-chain-node"
 MANAGER_BIN="$INSTALL_BIN_DIR/push-validator"
 
 # Detect what phases are needed BEFORE creating directories
@@ -771,36 +779,31 @@ fi
 next_phase "Installing Validator Manager"
 verbose "Target directory: $ROOT_DIR"
 
-# Determine repo source
+# Determine repo source for push-validator-cli (validator manager)
 if [[ "$USE_LOCAL" = "yes" || -n "$LOCAL_REPO" ]]; then
-  if [[ -n "$LOCAL_REPO" ]]; then REPO_DIR="$(cd "$LOCAL_REPO" && pwd -P)"; else REPO_DIR="$(cd "$SELF_DIR/.." && pwd -P)"; fi
+  if [[ -n "$LOCAL_REPO" ]]; then REPO_DIR="$(cd "$LOCAL_REPO" && pwd -P)"; else REPO_DIR="$(cd "$SELF_DIR" && pwd -P)"; fi
   step "Using local repository: $REPO_DIR"
-  if [[ ! -f "$REPO_DIR/push-validator-manager/go.mod" ]]; then
-    err "Expected Go module not found at: $REPO_DIR/push-validator-manager"; exit 1
+  if [[ ! -f "$REPO_DIR/go.mod" ]]; then
+    err "Expected Go module not found at: $REPO_DIR/go.mod"; exit 1
   fi
 else
   rm -rf "$REPO_DIR"
-  step "Cloning push-chain-node (ref: $PNM_REF)"
-  git clone --quiet --depth 1 --branch "$PNM_REF" https://github.com/pushchain/push-chain-node "$REPO_DIR"
+  step "Cloning push-validator-cli (ref: $PNM_REF)"
+  git clone --quiet --depth 1 --branch "$PNM_REF" https://github.com/pushchain/push-validator-cli "$REPO_DIR"
 fi
 
-# Build manager from source (ensures latest + no external runtime deps)
-if [[ ! -d "$REPO_DIR/push-validator-manager" ]]; then
-  err "Expected directory missing: $REPO_DIR/push-validator-manager"
-  warn "The cloned ref ('$PNM_REF') may not include the Go module yet."
-  # Suggest local usage if available
-  LOCAL_CANDIDATE="$(cd "$SELF_DIR/.." 2>/dev/null && pwd -P || true)"
-  if [[ -n "$LOCAL_CANDIDATE" && -d "$LOCAL_CANDIDATE/push-validator-manager" ]]; then
-    warn "Try: bash push-validator-manager/install.sh --use-local"
-  fi
-  warn "Or specify a branch/tag that contains it: PNM_REF=main bash push-validator-manager/install.sh"
+# Verify push-validator-cli repo structure
+if [[ ! -f "$REPO_DIR/go.mod" ]]; then
+  err "Expected go.mod missing in: $REPO_DIR"
+  warn "The cloned ref ('$PNM_REF') may not be valid."
+  warn "Try: PNM_REF=main bash install.sh"
   exit 1
 fi
 
 # Check if already up-to-date (idempotent install)
 SKIP_BUILD=no
 if [[ -x "$MANAGER_BIN" ]]; then
-  CURRENT_COMMIT=$(cd "$REPO_DIR/push-validator-manager" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+  CURRENT_COMMIT=$(cd "$REPO_DIR" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
   # Extract commit from version output (format: "push-validator vX.Y.Z (1f599bd) built ...")
   INSTALLED_COMMIT=$("$MANAGER_BIN" version 2>/dev/null | sed -n 's/.*(\([0-9a-f]\{7,\}\)).*/\1/p')
   # Only skip build if both are valid hex commits and match
@@ -812,7 +815,7 @@ fi
 
 if [[ "$SKIP_BUILD" = "no" ]]; then
   step "Building Push Validator Manager binary"
-  pushd "$REPO_DIR/push-validator-manager" >/dev/null
+  pushd "$REPO_DIR" >/dev/null
 
   # Build version information
   VERSION=${VERSION:-$(git describe --tags --always --dirty 2>/dev/null || echo "v1.0.0")}
@@ -868,13 +871,17 @@ fi
 
 next_phase "Building Chain Binary"
 
-# Build or select pchaind (prefer locally built binary to match network upgrades)
-BUILD_SCRIPT="$REPO_DIR/push-validator-manager/scripts/build-pchaind.sh"
+# Clone push-chain-node for building pchaind
+BUILD_SCRIPT="$REPO_DIR/scripts/build-pchaind.sh"
 if [[ -f "$BUILD_SCRIPT" ]]; then
+  step "Cloning push-chain-node (ref: $PCHAIN_REF)"
+  rm -rf "$PCHAIN_REPO_DIR"
+  git clone --quiet --depth 1 --branch "$PCHAIN_REF" https://github.com/pushchain/push-chain-node "$PCHAIN_REPO_DIR"
+
   step "Building Push Chain binary (Push Node Daemon) from source"
-  # Build from repo (whether local or cloned)
-  BUILD_OUTPUT="$REPO_DIR/push-validator-manager/scripts/build"
-  if bash "$BUILD_SCRIPT" "$REPO_DIR" "$BUILD_OUTPUT"; then
+  # Build from push-chain-node repo
+  BUILD_OUTPUT="$REPO_DIR/scripts/build"
+  if bash "$BUILD_SCRIPT" "$PCHAIN_REPO_DIR" "$BUILD_OUTPUT"; then
     if [[ -f "$BUILD_OUTPUT/pchaind" ]]; then
       mkdir -p "$INSTALL_BIN_DIR"
       ln -sf "$BUILD_OUTPUT/pchaind" "$INSTALL_BIN_DIR/pchaind"
