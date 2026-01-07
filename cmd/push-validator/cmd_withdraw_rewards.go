@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/pushchain/push-validator-cli/internal/config"
+	"github.com/pushchain/push-validator-cli/internal/dashboard"
 	"github.com/pushchain/push-validator-cli/internal/node"
 	ui "github.com/pushchain/push-validator-cli/internal/ui"
 	"github.com/pushchain/push-validator-cli/internal/validator"
@@ -141,8 +142,8 @@ func handleWithdrawRewards(cfg config.Config) {
 	fmt.Println()
 	p.Header("Current Rewards")
 	if rewardsErr == nil {
-		p.KeyValueLine("Commission Rewards", commission+" PC", "green")
-		p.KeyValueLine("Outstanding Rewards", outstanding+" PC", "green")
+		p.KeyValueLine("Commission Rewards", dashboard.FormatSmartNumber(commission)+" PC", "green")
+		p.KeyValueLine("Outstanding Rewards", dashboard.FormatSmartNumber(outstanding)+" PC", "green")
 	} else {
 		fmt.Println(p.Colors.Warning("⚠️ Could not fetch rewards, but proceeding with withdrawal"))
 	}
