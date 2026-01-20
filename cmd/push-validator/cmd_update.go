@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/pushchain/push-validator-cli/internal/update"
 	ui "github.com/pushchain/push-validator-cli/internal/ui"
@@ -58,6 +59,15 @@ Examples:
 
 			latestVersion := strings.TrimPrefix(release.TagName, "v")
 			currentVersion := strings.TrimPrefix(Version, "v")
+
+			// Save result to cache for dashboard/background check
+			cfg := loadCfg()
+			updateAvailable := update.IsNewerVersion(Version, release.TagName)
+			_ = update.SaveCache(cfg.HomeDir, &update.CacheEntry{
+				CheckedAt:       time.Now(),
+				LatestVersion:   latestVersion,
+				UpdateAvailable: updateAvailable,
+			})
 
 			// Check if update needed
 			if !force && !update.IsNewerVersion(Version, release.TagName) {
