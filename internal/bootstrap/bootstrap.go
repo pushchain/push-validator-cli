@@ -240,7 +240,7 @@ func (s *svc) getGenesis(ctx context.Context, url string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != 200 {
 		return nil, fmt.Errorf("status %d", resp.StatusCode)
 	}
@@ -256,104 +256,6 @@ func (s *svc) getGenesis(ctx context.Context, url string) ([]byte, error) {
 		return nil, errors.New("empty genesis")
 	}
 	return payload.Result.Genesis, nil
-}
-
-func (s *svc) peersFromNetInfo(ctx context.Context, url string) []string {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	resp, err := s.http.Do(req)
-	if err != nil || resp.StatusCode != 200 {
-		if resp != nil {
-			resp.Body.Close()
-		}
-		return nil
-	}
-	defer resp.Body.Close()
-	var payload struct {
-		Result struct {
-			Peers []struct {
-				NodeInfo struct {
-					ID         string `json:"id"`
-					ListenAddr string `json:"listen_addr"`
-				} `json:"node_info"`
-				RemoteIP string `json:"remote_ip"`
-			} `json:"peers"`
-		} `json:"result"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		return nil
-	}
-	out := make([]string, 0, len(payload.Result.Peers))
-	for _, p := range payload.Result.Peers {
-		if strings.Contains(p.NodeInfo.ListenAddr, "0.0.0.0") {
-			continue
-		}
-		if p.NodeInfo.ID == "" || p.RemoteIP == "" {
-			continue
-		}
-		out = append(out, fmt.Sprintf("%s@%s:26656", p.NodeInfo.ID, p.RemoteIP))
-		if len(out) >= 4 {
-			break
-		}
-	}
-	return out
-}
-
-func (s *svc) fallbackPeers(ctx context.Context, base string) []string {
-	// Use net_info to get actual network peers instead of the RPC server's own ID
-	var out []string
-
-	// Try to get peers from the provided base URL
-	if strings.HasPrefix(base, "http://") || strings.HasPrefix(base, "https://") {
-		netInfoURL := strings.TrimRight(base, "/") + "/net_info"
-		if peers := s.peersFromNetInfo(ctx, netInfoURL); len(peers) > 0 {
-			out = append(out, peers...)
-		}
-	}
-
-	// If we don't have enough peers, try known fallback RPCs
-	if len(out) < 2 {
-		fallbackRPCs := []string{
-			"https://donut.rpc.push.org/net_info",
-		}
-
-		for _, rpcURL := range fallbackRPCs {
-			if peers := s.peersFromNetInfo(ctx, rpcURL); len(peers) > 0 {
-				out = append(out, peers...)
-				if len(out) >= 4 {
-					break
-				} // Limit to prevent too many peers
-			}
-		}
-	}
-
-	return out
-}
-
-// getSnapshotPeers fetches actual network peers from snapshot RPC servers
-// This ensures we connect to the active network peers, not just the RPC servers
-func (s *svc) getSnapshotPeers(ctx context.Context, rpcURLs []string) []string {
-	var out []string
-	seen := make(map[string]bool) // Track unique peers
-
-	for _, rpcURL := range rpcURLs {
-		if rpcURL == "" {
-			continue
-		}
-
-		// Fetch actual network peers from net_info
-		netInfoURL := strings.TrimRight(rpcURL, "/") + "/net_info"
-		peers := s.peersFromNetInfo(ctx, netInfoURL)
-
-		// Add unique peers
-		for _, peer := range peers {
-			if !seen[peer] {
-				seen[peer] = true
-				out = append(out, peer)
-			}
-		}
-	}
-
-	return out
 }
 
 func hostToStateSyncURL(rpc string) string {

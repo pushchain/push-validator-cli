@@ -76,13 +76,13 @@ func TestDialAndSubscribeHeaders_JSONRPCSubprotocol(t *testing.T) {
 
     ln, err := net.Listen("tcp", "127.0.0.1:0")
     if err != nil { t.Skipf("skipping: cannot listen: %v", err) }
-    defer ln.Close()
+    defer func() { _ = ln.Close() }()
 
     srvErr := make(chan error, 1)
     go func() {
         c, err := ln.Accept()
         if err != nil { srvErr <- err; return }
-        defer c.Close()
+        defer func() { _ = c.Close() }()
         br := bufio.NewReadWriter(bufio.NewReader(c), bufio.NewWriter(c))
         // Read HTTP request
         statusLine, err := br.Reader.ReadString('\n')

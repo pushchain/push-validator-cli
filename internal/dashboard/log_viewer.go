@@ -440,7 +440,7 @@ func (lv *LogViewer) loadBacklog(n int) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	scanner := bufio.NewScanner(f)
 	// Allow long log lines (up to 512 KiB)
@@ -474,7 +474,7 @@ func (lv *LogViewer) followFile(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	// Seek to end
 	if _, err := f.Seek(0, io.SeekEnd); err != nil {

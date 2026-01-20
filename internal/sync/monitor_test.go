@@ -36,7 +36,7 @@ func TestTailStatesync_FiltersAndSignals(t *testing.T) {
     logPath := filepath.Join(dir, "pchaind.log")
     f, err := os.Create(logPath)
     if err != nil { t.Fatal(err) }
-    defer f.Close()
+    defer func() { _ = f.Close() }()
     ch := make(chan string, 4)
     stop := make(chan struct{})
     ctx, cancel := context.WithCancel(context.Background())

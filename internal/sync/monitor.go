@@ -712,7 +712,7 @@ func tailStatesync(ctx context.Context, path string, out chan<- string, stop <-c
 	if err != nil {
 		return
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	// Seek to end
 	if _, err := f.Seek(0, io.SeekEnd); err != nil {
 		return
@@ -764,7 +764,7 @@ func isSyncedQuick(local string) bool {
 	if err != nil {
 		return false
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	var payload struct {
 		Result struct {
 			SyncInfo struct {
@@ -791,42 +791,6 @@ func waitTCP(hostport string, d time.Duration) bool {
 	return false
 }
 
-func pollRemote(ctx context.Context, base string, every time.Duration, out chan<- int64) {
-	defer close(out)
-	httpc := &http.Client{Timeout: 2 * time.Second}
-	base = strings.TrimRight(base, "/")
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(every):
-			req, _ := http.NewRequestWithContext(ctx, http.MethodGet, base+"/status", nil)
-			resp, err := httpc.Do(req)
-			if err != nil {
-				continue
-			}
-			var payload struct {
-				Result struct {
-					SyncInfo struct {
-						Height string `json:"latest_block_height"`
-					} `json:"sync_info"`
-				} `json:"result"`
-			}
-			_ = json.NewDecoder(resp.Body).Decode(&payload)
-			_ = resp.Body.Close()
-			if payload.Result.SyncInfo.Height != "" {
-				hv, _ := strconvParseInt(payload.Result.SyncInfo.Height)
-				if hv > 0 {
-					select {
-					case out <- hv:
-					default:
-					}
-				}
-			}
-		}
-	}
-}
-
 // probeRemoteOnce fetches a single remote height with a small timeout.
 func probeRemoteOnce(base string, fallback int64) int64 {
 	base = strings.TrimRight(base, "/")
@@ -841,7 +805,7 @@ func probeRemoteOnce(base string, fallback int64) int64 {
 	if err != nil {
 		return fallback
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	var payload struct {
 		Result struct {
 			SyncInfo struct {

@@ -77,7 +77,7 @@ func (c *httpClient) RemoteStatus(ctx context.Context, baseURL string) (Status, 
     req, _ := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/status", nil)
     resp, err := c.http.Do(req)
     if err != nil { return Status{}, err }
-    defer resp.Body.Close()
+    defer func() { _ = resp.Body.Close() }()
     var payload struct {
         Result struct {
             NodeInfo struct{
@@ -112,7 +112,7 @@ func (c *httpClient) BlockHash(ctx context.Context, height int64) (string, error
     req, _ := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
     resp, err := c.http.Do(req)
     if err != nil { return "", err }
-    defer resp.Body.Close()
+    defer func() { _ = resp.Body.Close() }()
     var payload struct{ Result struct{ BlockID struct{ Hash string `json:"hash"` } `json:"block_id"` } `json:"result"` }
     if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil { return "", err }
     return strings.ToUpper(payload.Result.BlockID.Hash), nil
@@ -122,7 +122,7 @@ func (c *httpClient) Peers(ctx context.Context) ([]Peer, error) {
     req, _ := http.NewRequestWithContext(ctx, http.MethodGet, c.base+"/net_info", nil)
     resp, err := c.http.Do(req)
     if err != nil { return nil, err }
-    defer resp.Body.Close()
+    defer func() { _ = resp.Body.Close() }()
     var payload struct {
         Result struct {
             Peers []struct {

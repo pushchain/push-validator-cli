@@ -387,22 +387,6 @@ func joinLines(lines []string, sep string) string {
 	return b.String()
 }
 
-// innerWidthForBox calculates usable content width after accounting for border and padding
-// total: allocated width from layout
-// hasBorder: whether component has a border (adds 2 chars for left+right)
-// padLeftRight: horizontal padding value
-func innerWidthForBox(total int, hasBorder bool, padLeftRight int) int {
-	border := 0
-	if hasBorder {
-		border = 2 // left + right border chars
-	}
-	w := total - border - 2*padLeftRight
-	if w < 1 {
-		w = 1
-	}
-	return w
-}
-
 // FormatTitle formats component titles with bold + color styling, centered and capitalized
 func FormatTitle(title string, width int) string {
 	title = strings.ToUpper(title)

@@ -34,10 +34,6 @@ func truncateAddress(addr string, maxWidth int) string {
     return addr
 }
 
-func handleValidators(cfg config.Config) error {
-    return handleValidatorsWithFormat(cfg, false)
-}
-
 // handleValidatorsWithFormat prints either a pretty table (default)
 // or raw JSON (--output=json at root) of the current validator set.
 func handleValidatorsWithFormat(cfg config.Config, jsonOut bool) error {

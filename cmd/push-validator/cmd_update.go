@@ -97,7 +97,7 @@ Examples:
 			if !force && !flagYes {
 				fmt.Print("Update now? [Y/n]: ")
 				var response string
-				fmt.Scanln(&response)
+				_, _ = fmt.Scanln(&response)
 				response = strings.ToLower(strings.TrimSpace(response))
 				if response != "" && response != "y" && response != "yes" {
 					p.Warn("Update cancelled")

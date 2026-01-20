@@ -105,8 +105,7 @@ func handleIncreaseStake(cfg config.Config) {
 	}
 
 	// Display balance info
-	const minDelegate = "100000000000000000"        // 0.1 PC in wei
-	const feeReserve = "100000000000000000"         // 0.1 PC in wei for gas fees
+	const feeReserve = "100000000000000000" // 0.1 PC in wei for gas fees
 
 	balInt := new(big.Int)
 	balInt.SetString(balance, 10)

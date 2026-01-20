@@ -118,7 +118,7 @@ func setInSection(content, section string, kv map[string]string) string {
 	}
 	start := loc[1]
 	// Find next section
-	reAny := regexp.MustCompile("(?m)^\\[[^]]+\\]\\s*$")
+	reAny := regexp.MustCompile(`(?m)^\[[^]]+\]\s*$`)
 	next := reAny.FindStringIndex(content[start:])
 	end := len(content)
 	if next != nil {

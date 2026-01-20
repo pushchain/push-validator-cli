@@ -457,20 +457,6 @@ func (c *ValidatorsList) getEVMAddressFromCache(address string) string {
 	return ""
 }
 
-// getStatusIcon returns appropriate icon for validator status
-func (c *ValidatorsList) getStatusIcon(status string) string {
-	switch status {
-	case "BONDED":
-		return c.icons.OK
-	case "UNBONDING":
-		return c.icons.Warn
-	case "UNBONDED":
-		return c.icons.Err
-	default:
-		return c.icons.Warn
-	}
-}
-
 // fetchPageRewardsCmd returns a command to fetch rewards for current page in parallel
 func (c *ValidatorsList) fetchPageRewardsCmd() tea.Cmd {
 	return func() tea.Msg {

@@ -42,15 +42,6 @@ func findPchaind() string {
     return "pchaind"
 }
 
-// findCosmovisor returns the path to the cosmovisor binary, resolving
-// COSMOVISOR environment variable or falling back to PATH lookup.
-// Returns empty string if not found.
-func findCosmovisor() string {
-    if v := os.Getenv("COSMOVISOR"); v != "" { return v }
-    if path, err := exec.LookPath("cosmovisor"); err == nil { return path }
-    return ""
-}
-
 // getenvDefault returns the environment value for k, or default d
 // when k is not set.
 func getenvDefault(k, d string) string { if v := os.Getenv(k); v != "" { return v }; return d }

@@ -34,7 +34,7 @@ func RunLogUIV2(ctx context.Context, opts LogUIOptions) error {
 	if err != nil {
 		return tailFollowSimple(ctx, opts.LogPath)
 	}
-	defer term.Restore(stdin, oldState)
+	defer func() { _ = term.Restore(stdin, oldState) }()
 
 	// 4. Allow terminal state to stabilize after entering raw mode
 	time.Sleep(10 * time.Millisecond)
@@ -131,7 +131,7 @@ func streamLogsSimple(ctx context.Context, logPath string, onPrint func()) error
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	const backlogLines = 20
 	// Emit recent history so the viewer isn't blank on start
@@ -221,11 +221,4 @@ func tailFollowSimple(ctx context.Context, logPath string) error {
 		return cmd.Run()
 	}
 	return nil
-}
-
-func minInt(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }

@@ -580,30 +580,6 @@ func printStatusText(result statusResult) {
     }
 }
 
-// truncateNodeID shortens a long node ID for display
-func truncateNodeID(nodeID string) string {
-    if len(nodeID) <= 16 {
-        return nodeID
-    }
-    return nodeID[:8] + "..." + nodeID[len(nodeID)-8:]
-}
-
-// renderProgressBar creates a visual progress bar using block characters
-func renderProgressBar(percent float64, width int) string {
-    if percent < 0 {
-        percent = 0
-    }
-    if percent > 100 {
-        percent = 100
-    }
-
-    filled := int(float64(width) * (percent / 100))
-    empty := width - filled
-
-    bar := strings.Repeat("█", filled) + strings.Repeat("░", empty)
-    return fmt.Sprintf("[%s] %.2f%%", bar, percent)
-}
-
 // formatWithCommas adds comma separators to large numbers
 func formatWithCommas(n int64) string {
     if n < 1000 {

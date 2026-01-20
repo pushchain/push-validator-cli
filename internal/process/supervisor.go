@@ -279,7 +279,7 @@ func TailFollow(path string, w io.Writer, stop <-chan struct{}) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	// Start at end of file
 	if _, err := f.Seek(0, io.SeekEnd); err != nil {

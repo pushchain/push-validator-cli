@@ -79,7 +79,7 @@ func (p *provider) latestHeight(ctx context.Context, base string) (int64, error)
 	if err != nil {
 		return 0, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	var latest struct {
 		Result struct {
 			Block struct {
@@ -102,7 +102,7 @@ func (p *provider) latestFromStatus(ctx context.Context, base string) (int64, er
 	if err != nil {
 		return 0, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	var payload struct {
 		Result struct {
 			SyncInfo struct {
@@ -130,7 +130,7 @@ func (p *provider) blockHash(ctx context.Context, base string, height int64) (st
 	u := base + "/block?" + q
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if resp, err := p.doWithRetry(req); err == nil {
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		var blk struct {
 			Result struct {
 				BlockID struct {
@@ -149,7 +149,7 @@ func (p *provider) blockHash(ctx context.Context, base string, height int64) (st
 	if err != nil {
 		return "", err
 	}
-	defer resp2.Body.Close()
+	defer func() { _ = resp2.Body.Close() }()
 	var cm struct {
 		Result struct {
 			SignedHeader struct {

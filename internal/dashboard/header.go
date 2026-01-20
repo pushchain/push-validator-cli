@@ -3,14 +3,10 @@ package dashboard
 import (
 	"fmt"
 	"strings"
-	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
-
-// timeNow is a variable for time.Now to enable deterministic testing
-var timeNow = time.Now
 
 // Header component shows dashboard title, timestamp, and status
 type Header struct {

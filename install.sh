@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
-# Push Validator Manager (Go) — Installer with local/clone build + guided start
+# Push Validator Manager (Go) — Installer with binary download + guided start
 #
-# This script installs the Push Validator Manager from push-validator-cli repo
-# and builds the pchaind binary from the push-chain-node repo.
+# This script installs the Push Validator Manager by downloading pre-built binaries
+# from GitHub Releases. Use --dev for development builds from source.
 #
 # Examples:
-#   bash install.sh                            # default: reset data, build if needed, init+start, wait for sync
+#   bash install.sh                            # default: download binaries, init+start, wait for sync
 #   bash install.sh --no-reset --no-start      # install only
-#   bash install.sh --use-local                # use current repo checkout to build manager
-#   PNM_REF=v1.0.0 bash install.sh             # clone specific ref for push-validator-cli
-#   PCHAIN_REF=v1.0.0 bash install.sh          # clone specific ref for push-chain-node
+#   bash install.sh --dev                      # build from current repo checkout (dev mode)
+#   bash install.sh --dev-dir /path/to/repo    # build from specific directory
+#   PNM_REF=v1.0.0 bash install.sh             # download specific version of push-validator
+#   PCHAIN_REF=v1.0.0 bash install.sh          # download specific version of pchaind
 
 set -euo pipefail
 IFS=$'\n\t'
@@ -516,6 +517,153 @@ download_pchaind() {
     return 1
 }
 
+# Helper: Download push-validator binary from GitHub releases
+download_push_validator() {
+    local os arch version download_url checksum_url temp_dir filename ver_num
+
+    # Detect OS
+    case "$(uname -s)" in
+        Linux) os="linux" ;;
+        Darwin) os="darwin" ;;
+        *)
+            verbose "Unsupported OS for pre-built binary: $(uname -s)"
+            return 1
+            ;;
+    esac
+
+    # Detect architecture
+    case "$(uname -m)" in
+        x86_64|amd64) arch="amd64" ;;
+        aarch64|arm64) arch="arm64" ;;
+        *)
+            verbose "Unsupported architecture for pre-built binary: $(uname -m)"
+            return 1
+            ;;
+    esac
+
+    # Get version (use PNM_REF if it looks like a version tag, otherwise fetch latest release)
+    if [[ "$PNM_REF" =~ ^v[0-9] ]]; then
+        version="$PNM_REF"
+        step "Using specified version: $version"
+    else
+        step "Fetching latest release version"
+        if command -v curl >/dev/null 2>&1; then
+            version=$(curl -sL https://api.github.com/repos/pushchain/push-validator-cli/releases/latest 2>/dev/null | grep '"tag_name"' | head -1 | sed 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
+        fi
+        if [[ -z "$version" ]]; then
+            verbose "Could not determine latest release version (no stable release found)"
+            return 1
+        fi
+        verbose "Latest release: $version"
+    fi
+
+    # Strip 'v' prefix for filename (v0.1.0 -> 0.1.0)
+    ver_num="${version#v}"
+
+    # Build download URL
+    # Format: push-validator_<version>_<os>_<arch>.tar.gz
+    filename="push-validator_${ver_num}_${os}_${arch}.tar.gz"
+    download_url="https://github.com/pushchain/push-validator-cli/releases/download/${version}/${filename}"
+    checksum_url="https://github.com/pushchain/push-validator-cli/releases/download/${version}/checksums.txt"
+
+    step "Downloading push-validator ${version} for ${os}/${arch}"
+    verbose "URL: $download_url"
+
+    # Create temp directory
+    temp_dir=$(mktemp -d)
+    # Use a subshell trap to clean up temp dir
+    (
+        trap "rm -rf '$temp_dir'" EXIT
+
+        # Download tarball
+        if command -v curl >/dev/null 2>&1; then
+            if ! curl -L --progress-bar -o "$temp_dir/$filename" "$download_url" 2>/dev/null; then
+                verbose "curl download failed"
+                exit 1
+            fi
+        elif command -v wget >/dev/null 2>&1; then
+            if ! wget --show-progress -O "$temp_dir/$filename" "$download_url" 2>/dev/null; then
+                verbose "wget download failed"
+                exit 1
+            fi
+        else
+            verbose "Neither curl nor wget available"
+            exit 1
+        fi
+
+        # Verify file was downloaded and has content
+        if [[ ! -s "$temp_dir/$filename" ]]; then
+            verbose "Downloaded file is empty or missing"
+            exit 1
+        fi
+
+        # Verify checksum
+        if curl -sL -o "$temp_dir/checksums.txt" "$checksum_url" 2>/dev/null && [[ -s "$temp_dir/checksums.txt" ]]; then
+            step "Verifying checksum"
+            local expected_sum actual_sum
+            # Extract checksum for our specific file from checksums.txt
+            expected_sum=$(grep "$filename" "$temp_dir/checksums.txt" 2>/dev/null | awk '{print $1}')
+            if command -v sha256sum >/dev/null 2>&1; then
+                actual_sum=$(sha256sum "$temp_dir/$filename" | awk '{print $1}')
+            elif command -v shasum >/dev/null 2>&1; then
+                actual_sum=$(shasum -a 256 "$temp_dir/$filename" | awk '{print $1}')
+            fi
+            if [[ -n "$actual_sum" && -n "$expected_sum" ]]; then
+                if [[ "$expected_sum" != "$actual_sum" ]]; then
+                    err "Checksum mismatch! Expected: $expected_sum, Got: $actual_sum"
+                    exit 1
+                fi
+                ok "Checksum verified"
+            fi
+        else
+            verbose "Checksum file not available, skipping verification"
+        fi
+
+        # Extract tarball
+        step "Extracting binary"
+        if ! tar -xzf "$temp_dir/$filename" -C "$temp_dir" 2>/dev/null; then
+            verbose "Failed to extract tarball"
+            exit 1
+        fi
+
+        # Find push-validator binary in extracted files
+        local binary
+        binary=$(find "$temp_dir" -name "push-validator" -type f 2>/dev/null | head -1)
+        if [[ -z "$binary" || ! -f "$binary" ]]; then
+            verbose "push-validator binary not found in archive"
+            exit 1
+        fi
+
+        # Install binary to target location
+        mkdir -p "$(dirname "$MANAGER_BIN")"
+        rm -f "$MANAGER_BIN" 2>/dev/null || true
+        cp "$binary" "$MANAGER_BIN"
+        chmod +x "$MANAGER_BIN"
+
+        exit 0
+    )
+    local result=$?
+
+    # Clean up temp dir (in case subshell didn't)
+    rm -rf "$temp_dir" 2>/dev/null || true
+
+    if [[ $result -eq 0 ]]; then
+        # Verify installation
+        if [[ -x "$MANAGER_BIN" ]]; then
+            local installed_version
+            installed_version=$("$MANAGER_BIN" version 2>&1 | awk '{print $2}' || echo "")
+            if [[ -n "$installed_version" ]]; then
+                ok "Installed push-validator ($installed_version)"
+            else
+                ok "Installed push-validator ${version}"
+            fi
+            return 0
+        fi
+    fi
+
+    return 1
+}
+
 clean_data_and_preserve_keys() {
     local mode="$1"
     local suffix="${2:-1}"
@@ -665,16 +813,19 @@ while [[ $# -gt 0 ]]; do
     --snapshot-rpc) SNAPSHOT_RPC="$2"; shift 2 ;;
     --pchaind-ref) PCHAIN_REF="$2"; shift 2 ;;  # deprecated, use --pchain-ref
     --pchain-ref) PCHAIN_REF="$2"; shift 2 ;;
-    --use-local) USE_LOCAL="yes"; shift ;;
-    --local-repo) LOCAL_REPO="$2"; shift 2 ;;
+    --dev|--use-local) USE_LOCAL="yes"; shift ;;
+    --dev-dir|--local-repo) LOCAL_REPO="$2"; shift 2 ;;
     --help)
       echo "Push Validator Manager (Go) - Installer"
       echo
       echo "Usage: bash install.sh [OPTIONS]"
       echo
+      echo "By default, pre-built binaries are downloaded from GitHub Releases."
+      echo "Use --dev for development builds from source."
+      echo
       echo "Installation Options:"
-      echo "  --use-local          Use current repository checkout to build"
-      echo "  --local-repo DIR     Use specific local repository directory"
+      echo "  --dev                Build from script's directory (dev mode)"
+      echo "  --dev-dir DIR        Build from specific directory (dev mode)"
       echo "  --bin-dir DIR        Install binaries to DIR (default: ~/.local/bin)"
       echo "  --prefix DIR         Use DIR as installation prefix (sets data dir)"
       echo
@@ -685,8 +836,8 @@ while [[ $# -gt 0 ]]; do
       echo "  --snapshot-rpc URL   Snapshot RPC URL (default: https://rpc-testnet-donut-node2.push.org)"
       echo "  --keyring BACKEND    Keyring backend (default: test)"
       echo
-      echo "Build Options:"
-      echo "  --pchain-ref REF     Git ref for push-chain-node repo (default: main)"
+      echo "Version Options:"
+      echo "  --pchain-ref REF     Version/ref for pchaind binary (default: latest release)"
       echo "  --pchaind-ref REF    (deprecated) Alias for --pchain-ref"
       echo
       echo "Behavior Options:"
@@ -702,14 +853,14 @@ while [[ $# -gt 0 ]]; do
       echo "Environment Variables:"
       echo "  NO_COLOR             Set to disable colors"
       echo "  VERBOSE              Set to 'yes' for verbose output"
-      echo "  PNM_REF              Git ref for push-validator-cli (default: main)"
-      echo "  PCHAIN_REF           Git ref for push-chain-node (default: main)"
+      echo "  PNM_REF              Version/ref for push-validator (default: latest release)"
+      echo "  PCHAIN_REF           Version/ref for pchaind (default: latest release)"
       echo
       echo "Examples:"
-      echo "  bash install.sh --use-local --verbose"
-      echo "  bash install.sh --no-reset --no-start"
-      echo "  bash install.sh --bin-dir /usr/local/bin --prefix /opt/pchain"
-      echo "  PNM_REF=v1.0.0 PCHAIN_REF=main bash install.sh"
+      echo "  bash install.sh                          # Download latest binaries"
+      echo "  bash install.sh --dev --verbose          # Build from local repo"
+      echo "  bash install.sh --no-reset --no-start    # Install only"
+      echo "  PNM_REF=v0.1.1 bash install.sh           # Download specific version"
       exit 0
       ;;
     *) err "Unknown flag: $1 (use --help for usage)"; exit 2 ;;
@@ -766,30 +917,35 @@ verbose "  Root dir: $ROOT_DIR"
 verbose "  Bin dir: $INSTALL_BIN_DIR"
 verbose "  Home dir: $HOME_DIR"
 
-# Check git (simple, always needed)
-if ! command -v git >/dev/null 2>&1; then
-  err "Missing dependency: git"
-  echo
-  echo "Git is required to clone the repository."
-  echo
-  if [[ "$OSTYPE" == "darwin"* ]]; then
-    echo "Install with: brew install git"
-    echo "Or download from: https://git-scm.com/downloads"
-  elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
-    if command -v apt-get >/dev/null 2>&1; then
-      echo "Install with: sudo apt-get install git"
-    elif command -v yum >/dev/null 2>&1; then
-      echo "Install with: sudo yum install git"
+# Check git (only needed for dev mode: --use-local or --local-repo)
+if [[ "$USE_LOCAL" = "yes" || -n "$LOCAL_REPO" ]]; then
+  if ! command -v git >/dev/null 2>&1; then
+    err "Missing dependency: git"
+    echo
+    echo "Git is required for local development builds (--use-local)."
+    echo
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+      echo "Install with: brew install git"
+      echo "Or download from: https://git-scm.com/downloads"
+    elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
+      if command -v apt-get >/dev/null 2>&1; then
+        echo "Install with: sudo apt-get install git"
+      elif command -v yum >/dev/null 2>&1; then
+        echo "Install with: sudo yum install git"
+      else
+        echo "Install using your package manager or download from: https://git-scm.com/downloads"
+      fi
     else
-      echo "Install using your package manager or download from: https://git-scm.com/downloads"
+      echo "Download from: https://git-scm.com/downloads"
     fi
-  else
-    echo "Download from: https://git-scm.com/downloads"
+    exit 1
   fi
-  exit 1
 fi
 
 # Check Go with automatic installation option
+# Go is required for:
+# - Dev mode: building push-validator from local repo
+# - Always: installing cosmovisor (go install)
 GO_NEEDS_INSTALL=0
 GO_NEEDS_UPGRADE=0
 
@@ -797,7 +953,7 @@ if ! command -v go >/dev/null 2>&1; then
   GO_NEEDS_INSTALL=1
   warn "Go is not installed"
 else
-  # Validate Go version (requires 1.23+ for pchaind build)
+  # Validate Go version (requires 1.23+ for cosmovisor)
   GO_VERSION=$(go version | awk '{print $3}' | sed 's/go//')
   GO_MAJOR=$(echo "$GO_VERSION" | cut -d. -f1)
   GO_MINOR=$(echo "$GO_VERSION" | cut -d. -f2)
@@ -814,7 +970,7 @@ fi
 if [[ $GO_NEEDS_INSTALL -eq 1 ]] || [[ $GO_NEEDS_UPGRADE -eq 1 ]]; then
   echo
   if [[ $GO_NEEDS_INSTALL -eq 1 ]]; then
-    echo -e "${BOLD}Go 1.23 or higher is required to build the Push Chain binary.${NC}"
+    echo -e "${BOLD}Go 1.23 or higher is required to install Cosmovisor (automatic upgrades).${NC}"
   else
     echo -e "${BOLD}Your Go version is too old. Go 1.23+ is required.${NC}"
   fi
@@ -970,65 +1126,66 @@ fi
 next_phase "Installing Validator Manager"
 verbose "Target directory: $ROOT_DIR"
 
-# Determine repo source for push-validator-cli (validator manager)
+# Determine installation method
 if [[ "$USE_LOCAL" = "yes" || -n "$LOCAL_REPO" ]]; then
+  # Dev mode: build from local repository
   if [[ -n "$LOCAL_REPO" ]]; then REPO_DIR="$(cd "$LOCAL_REPO" && pwd -P)"; else REPO_DIR="$(cd "$SELF_DIR" && pwd -P)"; fi
   step "Using local repository: $REPO_DIR"
   if [[ ! -f "$REPO_DIR/go.mod" ]]; then
     err "Expected Go module not found at: $REPO_DIR/go.mod"; exit 1
   fi
+
+  # Check if already up-to-date (idempotent install)
+  SKIP_BUILD=no
+  if [[ -x "$MANAGER_BIN" ]]; then
+    CURRENT_COMMIT=$(cd "$REPO_DIR" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+    # Extract commit from version output (format: "push-validator vX.Y.Z (1f599bd) built ...")
+    INSTALLED_COMMIT=$("$MANAGER_BIN" version 2>/dev/null | sed -n 's/.*(\([0-9a-f]\{7,\}\)).*/\1/p')
+    # Only skip build if both are valid hex commits and match
+    if [[ "$CURRENT_COMMIT" =~ ^[0-9a-f]+$ ]] && [[ "$INSTALLED_COMMIT" =~ ^[0-9a-f]+$ ]] && [[ "$CURRENT_COMMIT" == "$INSTALLED_COMMIT" ]]; then
+      step "Manager already up-to-date ($CURRENT_COMMIT) - skipped"
+      SKIP_BUILD=yes
+    fi
+  fi
+
+  if [[ "$SKIP_BUILD" = "no" ]]; then
+    step "Building Push Validator Manager binary"
+    pushd "$REPO_DIR" >/dev/null
+
+    # Build version information
+    VERSION=${VERSION:-$(git describe --tags --always --dirty 2>/dev/null || echo "v1.0.0")}
+    COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+    BUILD_DATE=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+    LDFLAGS="-X main.Version=$VERSION -X main.Commit=$COMMIT -X main.BuildDate=$BUILD_DATE"
+
+    GOFLAGS="-trimpath" CGO_ENABLED=0 go build -mod=mod -ldflags="$LDFLAGS" -o "$MANAGER_BIN" ./cmd/push-validator
+    popd >/dev/null
+    chmod +x "$MANAGER_BIN"
+
+    # Compute and display SHA256
+    if command -v sha256sum >/dev/null 2>&1; then
+      MANAGER_SHA=$(sha256sum "$MANAGER_BIN" 2>/dev/null | awk '{print $1}')
+    elif command -v shasum >/dev/null 2>&1; then
+      MANAGER_SHA=$(shasum -a 256 "$MANAGER_BIN" 2>/dev/null | awk '{print $1}')
+    fi
+    if [[ -n "$MANAGER_SHA" ]]; then
+      SHA_SHORT="${MANAGER_SHA:0:8}...${MANAGER_SHA: -8}"
+      ok "Built push-validator (SHA256: $SHA_SHORT)"
+    else
+      ok "Built push-validator"
+    fi
+  fi
 else
-  rm -rf "$REPO_DIR"
-  step "Cloning push-validator-cli (ref: $PNM_REF)"
-  git clone --quiet --depth 1 --branch "$PNM_REF" https://github.com/pushchain/push-validator-cli "$REPO_DIR"
-fi
-
-# Verify push-validator-cli repo structure
-if [[ ! -f "$REPO_DIR/go.mod" ]]; then
-  err "Expected go.mod missing in: $REPO_DIR"
-  warn "The cloned ref ('$PNM_REF') may not be valid."
-  warn "Try: PNM_REF=main bash install.sh"
-  exit 1
-fi
-
-# Check if already up-to-date (idempotent install)
-SKIP_BUILD=no
-if [[ -x "$MANAGER_BIN" ]]; then
-  CURRENT_COMMIT=$(cd "$REPO_DIR" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
-  # Extract commit from version output (format: "push-validator vX.Y.Z (1f599bd) built ...")
-  INSTALLED_COMMIT=$("$MANAGER_BIN" version 2>/dev/null | sed -n 's/.*(\([0-9a-f]\{7,\}\)).*/\1/p')
-  # Only skip build if both are valid hex commits and match
-  if [[ "$CURRENT_COMMIT" =~ ^[0-9a-f]+$ ]] && [[ "$INSTALLED_COMMIT" =~ ^[0-9a-f]+$ ]] && [[ "$CURRENT_COMMIT" == "$INSTALLED_COMMIT" ]]; then
-    step "Manager already up-to-date ($CURRENT_COMMIT) - skipped"
-    SKIP_BUILD=yes
-  fi
-fi
-
-if [[ "$SKIP_BUILD" = "no" ]]; then
-  step "Building Push Validator Manager binary"
-  pushd "$REPO_DIR" >/dev/null
-
-  # Build version information
-  VERSION=${VERSION:-$(git describe --tags --always --dirty 2>/dev/null || echo "v1.0.0")}
-  COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
-  BUILD_DATE=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
-  LDFLAGS="-X main.Version=$VERSION -X main.Commit=$COMMIT -X main.BuildDate=$BUILD_DATE"
-
-  GOFLAGS="-trimpath" CGO_ENABLED=0 go build -mod=mod -ldflags="$LDFLAGS" -o "$MANAGER_BIN" ./cmd/push-validator
-  popd >/dev/null
-  chmod +x "$MANAGER_BIN"
-
-  # Compute and display SHA256
-  if command -v sha256sum >/dev/null 2>&1; then
-    MANAGER_SHA=$(sha256sum "$MANAGER_BIN" 2>/dev/null | awk '{print $1}')
-  elif command -v shasum >/dev/null 2>&1; then
-    MANAGER_SHA=$(shasum -a 256 "$MANAGER_BIN" 2>/dev/null | awk '{print $1}')
-  fi
-  if [[ -n "$MANAGER_SHA" ]]; then
-    SHA_SHORT="${MANAGER_SHA:0:8}...${MANAGER_SHA: -8}"
-    ok "Built push-validator (SHA256: $SHA_SHORT)"
-  else
-    ok "Built push-validator"
+  # Production mode: download pre-built binary from GitHub releases
+  if ! download_push_validator; then
+    err "Failed to download push-validator binary"
+    echo
+    echo "Please check your internet connection and try again."
+    echo "Or download manually from:"
+    echo "  https://github.com/pushchain/push-validator-cli/releases"
+    echo
+    echo "Alternatively, use --use-local to build from a local repository."
+    exit 1
   fi
 fi
 

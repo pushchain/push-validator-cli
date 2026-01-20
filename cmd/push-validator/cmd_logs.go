@@ -41,7 +41,7 @@ func handleLogs(sup process.Supervisor) error {
 				interactive = true
 				tty = t
 			} else {
-				t.Close()
+				_ = t.Close()
 			}
 		}
 	}
@@ -56,7 +56,7 @@ func handleLogs(sup process.Supervisor) error {
 		}
 		defer func() {
 			if tty != nil {
-				tty.Close()
+				_ = tty.Close()
 			}
 			os.Stdin = origIn
 			os.Stdout = origOut
@@ -70,7 +70,7 @@ func handleLogs(sup process.Supervisor) error {
 		})
 	}
 	if tty != nil {
-		tty.Close()
+		_ = tty.Close()
 	}
 
 	getPrinter().Info(fmt.Sprintf("Tailing %s (Ctrl+C to stop)", lp))

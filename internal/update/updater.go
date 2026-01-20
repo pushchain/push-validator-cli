@@ -67,7 +67,7 @@ func (u *Updater) Download(asset *Asset, progress ProgressFunc) ([]byte, error) 
 	if err != nil {
 		return nil, fmt.Errorf("failed to download: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("download failed: %s", resp.Status)
@@ -119,7 +119,7 @@ func (u *Updater) VerifyChecksum(data []byte, release *Release, assetName string
 	if err != nil {
 		return fmt.Errorf("failed to download checksums: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// Parse checksums.txt (format: "sha256  filename")
 	expectedHash := ""
@@ -154,7 +154,7 @@ func (u *Updater) ExtractBinary(archiveData []byte) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create gzip reader: %w", err)
 	}
-	defer gzReader.Close()
+	defer func() { _ = gzReader.Close() }()
 
 	tarReader := tar.NewReader(gzReader)
 
@@ -242,13 +242,13 @@ func copyFile(src, dst string) error {
 	if err != nil {
 		return err
 	}
-	defer source.Close()
+	defer func() { _ = source.Close() }()
 
 	dest, err := os.Create(dst)
 	if err != nil {
 		return err
 	}
-	defer dest.Close()
+	defer func() { _ = dest.Close() }()
 
 	_, err = io.Copy(dest, source)
 	return err

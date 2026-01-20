@@ -131,7 +131,7 @@ func handleRegisterValidator(cfg config.Config) {
 		if tty != nil {
 			defer func() {
 				os.Stdin = savedStdin
-				tty.Close()
+				_ = tty.Close()
 			}()
 		}
 
@@ -242,7 +242,7 @@ func runRegisterValidator(cfg config.Config, moniker, keyName, amount, commissio
 	if tty != nil {
 		defer func() {
 			os.Stdin = savedStdin
-			tty.Close()
+			_ = tty.Close()
 		}()
 	}
 

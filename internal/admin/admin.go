@@ -98,11 +98,11 @@ func Backup(opts BackupOptions) (string, error) {
     outPath := filepath.Join(outDir, fmt.Sprintf("backup-%s.tar.gz", ts))
     f, err := os.Create(outPath)
     if err != nil { return "", err }
-    defer f.Close()
+    defer func() { _ = f.Close() }()
     gz := gzip.NewWriter(f)
-    defer gz.Close()
+    defer func() { _ = gz.Close() }()
     tw := tar.NewWriter(gz)
-    defer tw.Close()
+    defer func() { _ = tw.Close() }()
 
     // Include important paths
     include := []string{
@@ -132,7 +132,7 @@ func addFile(tw *tar.Writer, path string, base string) error {
     if err := tw.WriteHeader(hdr); err != nil { return err }
     f, err := os.Open(path)
     if err != nil { return err }
-    defer f.Close()
+    defer func() { _ = f.Close() }()
     _, err = io.Copy(tw, f)
     return err
 }

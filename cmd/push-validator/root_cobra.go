@@ -408,7 +408,7 @@ func init() {
 
 			// Continue with normal start
 			if startBin != "" {
-				os.Setenv("PCHAIND", startBin)
+				_ = os.Setenv("PCHAIND", startBin)
 			}
 			_, err := sup.Start(process.StartOpts{HomeDir: cfg.HomeDir, Moniker: os.Getenv("MONIKER"), BinPath: findPchaind()})
 			if err != nil {
@@ -472,7 +472,7 @@ func init() {
 		cfg := loadCfg()
 		p := getPrinter()
 		if restartBin != "" {
-			os.Setenv("PCHAIND", restartBin)
+			_ = os.Setenv("PCHAIND", restartBin)
 		}
 
 		// Determine which supervisor to use
@@ -634,7 +634,7 @@ func init() {
 			case "json":
 				enc := json.NewEncoder(os.Stdout)
 				enc.SetIndent("", "  ")
-				enc.Encode(map[string]string{
+				_ = enc.Encode(map[string]string{
 					"version":    Version,
 					"commit":     Commit,
 					"build_date": BuildDate,

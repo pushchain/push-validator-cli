@@ -71,18 +71,18 @@ func RunLogUI(ctx context.Context, opts LogUIOptions) error {
 
 	// 4. CRITICAL: Always restore terminal on ALL exit paths
 	defer func() {
-		term.Restore(stdin, oldState)     // restore cooked mode
-		fmt.Fprint(os.Stdout, "\x1b[?7h") // re-enable line wrap
+		_ = term.Restore(stdin, oldState)        // restore cooked mode
+		_, _ = fmt.Fprint(os.Stdout, "\x1b[?7h") // re-enable line wrap
 	}()
 
 	// 5. Setup: disable line wrap only (no scroll region for now)
-	fmt.Fprint(os.Stdout, "\x1b[?7l") // disable line wrap
+	_, _ = fmt.Fprint(os.Stdout, "\x1b[?7l") // disable line wrap
 
 	// 6. Show startup message (use \r\n in raw mode)
-	fmt.Fprint(os.Stdout, "\r\n")
-	fmt.Fprint(os.Stdout, "TUI mode active - Press Ctrl+C to STOP NODE | Press 'b' to detach\r\n")
-	fmt.Fprint(os.Stdout, strings.Repeat("-", min(cols, 80))+"\r\n")
-	fmt.Fprint(os.Stdout, "\r\n")
+	_, _ = fmt.Fprint(os.Stdout, "\r\n")
+	_, _ = fmt.Fprint(os.Stdout, "TUI mode active - Press Ctrl+C to STOP NODE | Press 'b' to detach\r\n")
+	_, _ = fmt.Fprint(os.Stdout, strings.Repeat("-", min(cols, 80))+"\r\n")
+	_, _ = fmt.Fprint(os.Stdout, "\r\n")
 
 	// 8. Context with cancel for signals
 	ctx, cancel := context.WithCancel(ctx)
@@ -120,7 +120,7 @@ func RunLogUI(ctx context.Context, opts LogUIOptions) error {
 
 		case err := <-logErr:
 			if err != nil && err != context.Canceled {
-				fmt.Fprintf(os.Stdout, "\r\nLog streaming error: %v\r\n", err)
+				_, _ = fmt.Fprintf(os.Stdout, "\r\nLog streaming error: %v\r\n", err)
 				time.Sleep(1 * time.Second)
 			}
 			return err
@@ -128,12 +128,12 @@ func RunLogUI(ctx context.Context, opts LogUIOptions) error {
 		case key := <-keyCh:
 			switch key {
 			case 3: // Ctrl+C - STOP NODE
-				fmt.Fprint(os.Stdout, "\r\nStopping node… ")
+				_, _ = fmt.Fprint(os.Stdout, "\r\nStopping node… ")
 				_ = stopNode(ctx, os.Stdout, opts.NoColor)
 				return nil
 
 			case opts.BgKey, byte(unicode.ToUpper(rune(opts.BgKey))): // 'b' or 'B' - DETACH VIEWER
-				fmt.Fprint(os.Stdout, "\r\nDetaching to background…\r\n")
+				_, _ = fmt.Fprint(os.Stdout, "\r\nDetaching to background…\r\n")
 				return nil
 			}
 		}
@@ -155,43 +155,12 @@ func stopNode(ctx context.Context, w io.Writer, noColor bool) error {
 	cmd.Stderr = io.Discard
 
 	if err := cmd.Run(); err != nil {
-		fmt.Fprintf(w, "failed (%v)\n", err)
+		_, _ = fmt.Fprintf(w, "failed (%v)\n", err)
 		return err
 	}
 
-	fmt.Fprint(w, "done\n")
+	_, _ = fmt.Fprint(w, "done\n")
 	return nil
-}
-
-// renderFooter draws the 3-line footer at the bottom of the screen
-func renderFooter(w io.Writer, rows, cols int, noColor bool) {
-	if cols < 1 {
-		cols = 1
-	}
-
-	// Never print more characters than we have columns
-	divLen := cols
-	if divLen > 80 {
-		divLen = 80
-	}
-
-	div := strings.Repeat("─", divLen)
-	if noColor {
-		div = strings.Repeat("-", divLen)
-	} else {
-		div = "\x1b[2m" + div + "\x1b[0m" // dim gray
-	}
-
-	controls := "Press Ctrl+C to STOP NODE | Press 'b' to run in background"
-	if len(controls) > cols {
-		// Truncate safely to terminal width
-		controls = controls[:cols]
-	}
-
-	// Clear both footer lines to avoid stale characters when resizing smaller
-	fmt.Fprintf(w, "\x1b[%d;1H\x1b[2K%s", rows-2, div)      // divider
-	fmt.Fprintf(w, "\x1b[%d;1H\x1b[2K%s", rows-1, controls) // controls
-	fmt.Fprintf(w, "\x1b[%d;1H", rows)                      // spacer
 }
 
 // listenKeys reads keypresses from stdin with debouncing
