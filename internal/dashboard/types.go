@@ -91,6 +91,15 @@ type DashboardData struct {
 		Addr string
 	}
 
+	// CLI update notification
+	UpdateInfo struct {
+		Available     bool
+		LatestVersion string
+	}
+
+	// CLI version (for display in header)
+	CLIVersion string
+
 	LastUpdate time.Time
 	Err        error // Last fetch error (for display in header)
 }
@@ -102,5 +111,6 @@ type Options struct {
 	RPCTimeout      time.Duration // Timeout for RPC calls (default: 5s)
 	NoColor         bool
 	NoEmoji         bool
-	Debug           bool // Enable debug output
+	Debug           bool   // Enable debug output
+	CLIVersion      string // CLI version to display in header
 }

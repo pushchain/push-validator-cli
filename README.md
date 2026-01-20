@@ -106,6 +106,7 @@ push-validator balance         # Check balance (defaults to validator key)
 push-validator reset           # Reset chain data (keeps address book)
 push-validator full-reset      # ⚠️ Complete reset (deletes ALL keys and data)
 push-validator backup          # Backup config and validator state
+push-validator update          # Update CLI to latest version
 ```
 
 ## ⚡ Features
@@ -123,6 +124,21 @@ push-validator backup          # Backup config and validator state
 - **Faucet**: https://faucet.push.org
 - **Explorer**: https://donut.push.network
 
+
+## 🔄 Updates
+
+The CLI automatically checks for updates and notifies you:
+- **Dashboard**: Shows notification in header when update available
+- **CLI commands**: Shows notification after command completes
+
+### Manual Update
+```bash
+push-validator update              # Update to latest version
+push-validator update --check      # Check only, don't install
+push-validator update --version v1.2.0  # Install specific version
+```
+
+Updates download pre-built binaries from GitHub Releases with checksum verification.
 
 ## 🔧 Advanced Setup (Optional)
 

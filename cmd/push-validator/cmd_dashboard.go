@@ -48,6 +48,7 @@ to a static text snapshot.`,
 				NoColor:         flagNoColor,
 				NoEmoji:         flagNoEmoji,
 				Debug:           debugMode,
+				CLIVersion:      Version,
 			}
 			opts = normalizeDashboardOptions(opts)
 

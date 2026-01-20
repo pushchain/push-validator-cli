@@ -69,8 +69,37 @@ func (c *Header) View(w, h int) string {
 	// Apply bold + cyan highlighting to title
 	titleStyled := FormatTitle(c.Title(), inner)
 
+	// Add version after title (dimmed)
+	if c.data.CLIVersion != "" {
+		versionStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("241")) // Dim gray
+		titleStyled = titleStyled + " " + versionStyle.Render("v"+strings.TrimPrefix(c.data.CLIVersion, "v"))
+	}
+
+	// Build the title line with optional update notification
+	var titleLine string
+	if c.data.UpdateInfo.Available && c.data.UpdateInfo.LatestVersion != "" {
+		// Style for update notification
+		updateStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("226")). // Yellow/gold
+			Bold(true)
+		updateText := updateStyle.Render(fmt.Sprintf("⬆ Update v%s available", c.data.UpdateInfo.LatestVersion))
+
+		// Calculate spacing to push update text to the right
+		titleLen := lipgloss.Width(titleStyled)
+		updateLen := lipgloss.Width(updateText)
+		spacing := inner - titleLen - updateLen
+		if spacing < 2 {
+			spacing = 2
+		}
+
+		titleLine = titleStyled + strings.Repeat(" ", spacing) + updateText
+	} else {
+		titleLine = titleStyled
+	}
+
 	var lines []string
-	lines = append(lines, titleStyled)
+	lines = append(lines, titleLine)
 
 	if c.data.Err != nil {
 		errLine := fmt.Sprintf("⚠ %s", c.data.Err.Error())

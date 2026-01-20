@@ -23,6 +23,7 @@ import (
 	"github.com/pushchain/push-validator-cli/internal/process"
 	syncmon "github.com/pushchain/push-validator-cli/internal/sync"
 	ui "github.com/pushchain/push-validator-cli/internal/ui"
+	"github.com/pushchain/push-validator-cli/internal/update"
 	"github.com/pushchain/push-validator-cli/internal/validator"
 )
 
@@ -36,6 +37,9 @@ var (
 // rootCmd wires the CLI surface using Cobra. Persistent flags are
 // applied to a loaded config in loadCfg(). Subcommands implement the
 // actual operations (init, start/stop, sync, status, etc.).
+// updateCheckResult stores the result of background update check
+var updateCheckResult *update.CheckResult
+
 var rootCmd = &cobra.Command{
 	Use:   "push-validator",
 	Short: "Push Validator",
@@ -51,6 +55,20 @@ var rootCmd = &cobra.Command{
 			Quiet:          flagQuiet,
 			Debug:          flagDebug,
 		})
+
+		// Start background update check (non-blocking)
+		// Skip for update command itself and help/version commands
+		cmdName := cmd.Name()
+		if cmdName != "update" && cmdName != "help" && cmdName != "version" {
+			go checkForUpdateBackground()
+		}
+	},
+	PersistentPostRun: func(cmd *cobra.Command, args []string) {
+		// Show update notification if available (after command completes)
+		// Skip for update command itself
+		if cmd.Name() != "update" && updateCheckResult != nil && updateCheckResult.UpdateAvailable {
+			showUpdateNotification(updateCheckResult.LatestVersion)
+		}
 	},
 }
 
@@ -850,6 +868,7 @@ func handleDashboard(cfg config.Config) error {
 		RPCTimeout:      5 * time.Second,
 		NoColor:         flagNoColor,
 		NoEmoji:         flagNoEmoji,
+		CLIVersion:      Version,
 		Debug:           false,
 	}
 	return runDashboardInteractive(opts)
@@ -937,4 +956,70 @@ func isTerminalInteractive() bool {
 		return false
 	}
 	return true
+}
+
+// checkForUpdateBackground performs a non-blocking update check.
+// Uses cache to avoid checking more than once per 24 hours.
+// Stores result in updateCheckResult global for use by PersistentPostRun.
+func checkForUpdateBackground() {
+	cfg := loadCfg()
+
+	// Check cache first (avoid network calls if recently checked)
+	cache, err := update.LoadCache(cfg.HomeDir)
+	if err == nil && update.IsCacheValid(cache) {
+		// Use cached result
+		if cache.UpdateAvailable {
+			updateCheckResult = &update.CheckResult{
+				CurrentVersion:  strings.TrimPrefix(Version, "v"),
+				LatestVersion:   cache.LatestVersion,
+				UpdateAvailable: true,
+			}
+		}
+		return
+	}
+
+	// Perform network check with timeout
+	updater, err := update.NewUpdater(Version)
+	if err != nil {
+		return // Silently fail - don't disrupt user's command
+	}
+
+	result, err := updater.Check()
+	if err != nil {
+		return // Silently fail
+	}
+
+	// Save to cache
+	_ = update.SaveCache(cfg.HomeDir, &update.CacheEntry{
+		CheckedAt:       time.Now(),
+		LatestVersion:   result.LatestVersion,
+		UpdateAvailable: result.UpdateAvailable,
+	})
+
+	// Store result for notification
+	if result.UpdateAvailable {
+		updateCheckResult = result
+	}
+}
+
+// showUpdateNotification displays an update notification after command completes.
+func showUpdateNotification(latestVersion string) {
+	// Don't show in JSON/YAML output modes
+	if flagOutput == "json" || flagOutput == "yaml" {
+		return
+	}
+
+	// Don't show in quiet mode
+	if flagQuiet {
+		return
+	}
+
+	c := ui.NewColorConfig()
+	c.Enabled = c.Enabled && !flagNoColor
+
+	fmt.Println()
+	fmt.Println(c.Warning("─────────────────────────────────────────────────────────────"))
+	fmt.Printf(c.Warning("  Update available: %s → %s\n"), Version, latestVersion)
+	fmt.Println(c.Info("  Run: push-validator update"))
+	fmt.Println(c.Warning("─────────────────────────────────────────────────────────────"))
 }

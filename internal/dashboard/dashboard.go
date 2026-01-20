@@ -17,6 +17,7 @@ import (
 	"github.com/pushchain/push-validator-cli/internal/metrics"
 	"github.com/pushchain/push-validator-cli/internal/node"
 	"github.com/pushchain/push-validator-cli/internal/process"
+	"github.com/pushchain/push-validator-cli/internal/update"
 	"github.com/pushchain/push-validator-cli/internal/validator"
 )
 
@@ -570,7 +571,7 @@ func (m *Dashboard) fetchCmd() tea.Cmd {
 
 // fetchData does the actual blocking I/O (called from fetchCmd)
 func (m *Dashboard) fetchData(ctx context.Context) (DashboardData, error) {
-	data := DashboardData{LastUpdate: time.Now()}
+	data := DashboardData{LastUpdate: time.Now(), CLIVersion: m.opts.CLIVersion}
 
 	// Use persistent collector for continuous CPU monitoring
 	data.Metrics = m.collector.Collect(ctx, m.opts.Config.RPCLocal, m.opts.Config.GenesisDomain)
@@ -665,6 +666,12 @@ func (m *Dashboard) fetchData(ctx context.Context) (DashboardData, error) {
 				data.MyValidator.OutstandingRewards = "—"
 			}
 		}
+	}
+
+	// Check for CLI update (uses cache, no network call)
+	if cache, err := update.LoadCache(m.opts.Config.HomeDir); err == nil && cache.UpdateAvailable {
+		data.UpdateInfo.Available = true
+		data.UpdateInfo.LatestVersion = cache.LatestVersion
 	}
 
 	return data, nil

@@ -1,0 +1,54 @@
+version: 2
+
+project_name: push-validator
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: push-validator
+    main: ./cmd/push-validator
+    binary: push-validator
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X main.Version={{.Version}}
+      - -X main.Commit={{.ShortCommit}}
+      - -X main.BuildDate={{.Date}}
+
+archives:
+  - id: default
+    format: tar.gz
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    files:
+      - LICENSE*
+      - README*
+
+checksum:
+  name_template: "checksums.txt"
+  algorithm: sha256
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+release:
+  github:
+    owner: pushchain
+    name: push-validator-cli
+  draft: false
+  prerelease: auto
+  name_template: "v{{.Version}}"
