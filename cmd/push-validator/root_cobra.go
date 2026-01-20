@@ -164,6 +164,7 @@ func init() {
 
 		// Upgrades
 		fmt.Fprintln(w, c.SubHeader("Upgrades"))
+		fmt.Fprintln(w, c.FormatCommandAligned("update", "Update push-validator to latest version", cmdWidth))
 		fmt.Fprintln(w, c.FormatCommandAligned("cosmovisor status", "Show Cosmovisor status", cmdWidth))
 		fmt.Fprintln(w, c.FormatCommandAligned("cosmovisor upgrade-info", "Generate upgrade JSON", cmdWidth))
 		fmt.Fprintln(w)
