@@ -31,6 +31,7 @@ func handleRegisterValidator(cfg config.Config) {
 
 	moniker := defaultMoniker
 	keyName := defaultKeyName
+	var importMnemonic string // Will hold mnemonic if user chooses to import
 
 	v := validator.NewWith(validator.Options{
 		BinPath:       findPchaind(),
@@ -168,12 +169,19 @@ func handleRegisterValidator(cfg config.Config) {
 				newName = strings.TrimSpace(newName)
 				if newName != "" {
 					keyName = newName
+					// Check if new key name also exists, if not, show wallet choice
+					if !keyExists(cfg, keyName) {
+						importMnemonic = promptWalletChoice(reader)
+					}
 				} else {
 					// User chose to reuse existing key
 					fmt.Println()
 					fmt.Println(p.Colors.Success("✓ Proceeding with existing key"))
 					fmt.Println()
 				}
+			} else {
+				// Key doesn't exist - prompt for wallet creation method
+				importMnemonic = promptWalletChoice(reader)
 			}
 			fmt.Println()
 		}
@@ -206,11 +214,11 @@ func handleRegisterValidator(cfg config.Config) {
 
 		// Interactive mode - let user choose stake amount
 		// Pass empty string to trigger the interactive stake selection prompt
-		runRegisterValidator(cfg, moniker, keyName, "", commissionRate)
+		runRegisterValidator(cfg, moniker, keyName, "", commissionRate, importMnemonic)
 	} else {
 		// JSON mode or env vars set - use default/env amount
 		commissionRate := getenvDefault("COMMISSION_RATE", "0.10")
-		runRegisterValidator(cfg, moniker, keyName, defaultAmount, commissionRate)
+		runRegisterValidator(cfg, moniker, keyName, defaultAmount, commissionRate, "")
 	}
 }
 
@@ -224,13 +232,68 @@ func keyExists(cfg config.Config, keyName string) bool {
 	return err == nil
 }
 
+// promptWalletChoice prompts the user to choose between creating a new wallet or importing an existing one.
+// Returns the mnemonic if user chooses to import, empty string otherwise.
+func promptWalletChoice(reader *bufio.Reader) string {
+	p := ui.NewPrinter(flagOutput)
+
+	fmt.Println()
+	fmt.Println(p.Colors.Info("Wallet Setup"))
+	fmt.Println(p.Colors.Separator(40))
+	fmt.Println()
+	fmt.Println("  [1] Create new wallet (generates new recovery phrase)")
+	fmt.Println("  [2] Import existing wallet (use your recovery phrase)")
+	fmt.Println()
+	fmt.Print("Choose option [1]: ")
+
+	choice, _ := reader.ReadString('\n')
+	choice = strings.TrimSpace(choice)
+
+	if choice != "2" {
+		// Default to creating new wallet
+		return ""
+	}
+
+	// User chose to import
+	fmt.Println()
+	fmt.Println(p.Colors.Info("Enter your recovery mnemonic phrase (12 or 24 words):"))
+	fmt.Println(p.Colors.Apply(p.Colors.Theme.Description, "(Words should be separated by spaces)"))
+	fmt.Println()
+	fmt.Print("> ")
+
+	mnemonic, err := reader.ReadString('\n')
+	if err != nil {
+		fmt.Println(p.Colors.Error(fmt.Sprintf("Error reading input: %v", err)))
+		return ""
+	}
+
+	// Normalize the mnemonic
+	mnemonic = strings.TrimSpace(mnemonic)
+	mnemonic = strings.Join(strings.Fields(mnemonic), " ") // Normalize whitespace
+	mnemonic = strings.ToLower(mnemonic)                   // Convert to lowercase
+
+	// Validate mnemonic format
+	if err := validator.ValidateMnemonic(mnemonic); err != nil {
+		fmt.Println()
+		fmt.Println(p.Colors.Error(fmt.Sprintf("Invalid mnemonic: %v", err)))
+		fmt.Println()
+		return ""
+	}
+
+	fmt.Println()
+	fmt.Println(p.Colors.Success("✓ Mnemonic format validated"))
+
+	return mnemonic
+}
+
 // runRegisterValidator performs the end-to-end registration flow:
 // - verify node is not catching up
-// - ensure key exists
+// - ensure key exists (or import from mnemonic)
 // - wait for funding if necessary
 // - submit create-validator transaction
 // It prints text or JSON depending on --output.
-func runRegisterValidator(cfg config.Config, moniker, keyName, amount, commissionRate string) {
+// If importMnemonic is non-empty, the key will be imported from that mnemonic instead of creating a new one.
+func runRegisterValidator(cfg config.Config, moniker, keyName, amount, commissionRate, importMnemonic string) {
 	savedStdin := os.Stdin
 	var tty *os.File
 	if !flagNonInteractive && !term.IsTerminal(int(savedStdin.Fd())) {
@@ -270,14 +333,40 @@ func runRegisterValidator(cfg config.Config, moniker, keyName, amount, commissio
 	v := validator.NewWith(validator.Options{BinPath: findPchaind(), HomeDir: cfg.HomeDir, ChainID: cfg.ChainID, Keyring: cfg.KeyringBackend, GenesisDomain: cfg.GenesisDomain, Denom: cfg.Denom})
 	ctx2, cancel2 := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel2()
-	keyInfo, err := v.EnsureKey(ctx2, keyName)
-	if err != nil {
-		if flagOutput == "json" {
-			getPrinter().JSON(map[string]any{"ok": false, "error": err.Error()})
-		} else {
-			fmt.Printf("key error: %v\n", err)
+
+	// Handle key creation or import based on importMnemonic
+	var keyInfo validator.KeyInfo
+	var err error
+	var wasImported bool
+
+	if importMnemonic != "" {
+		// Import key from mnemonic
+		keyInfo, err = v.ImportKey(ctx2, keyName, importMnemonic)
+		wasImported = true
+		if err != nil {
+			if flagOutput == "json" {
+				getPrinter().JSON(map[string]any{"ok": false, "error": err.Error()})
+			} else {
+				p := ui.NewPrinter(flagOutput)
+				fmt.Println()
+				fmt.Println(p.Colors.Error("Failed to import wallet"))
+				fmt.Printf("Error: %v\n\n", err)
+				fmt.Println(p.Colors.Info("Please verify your mnemonic phrase and try again."))
+				fmt.Println()
+			}
+			return
 		}
-		return
+	} else {
+		// Create new key or use existing (original behavior)
+		keyInfo, err = v.EnsureKey(ctx2, keyName)
+		if err != nil {
+			if flagOutput == "json" {
+				getPrinter().JSON(map[string]any{"ok": false, "error": err.Error()})
+			} else {
+				fmt.Printf("key error: %v\n", err)
+			}
+			return
+		}
 	}
 
 	evmAddr, err := v.GetEVMAddress(ctx2, keyInfo.Address)
@@ -288,15 +377,20 @@ func runRegisterValidator(cfg config.Config, moniker, keyName, amount, commissio
 	p := ui.NewPrinter(flagOutput)
 
 	if flagOutput != "json" {
-		// Display mnemonic if this is a new key
+		// Display appropriate message based on key creation method
 		if keyInfo.Mnemonic != "" {
-			// Display mnemonic in prominent box
+			// New key was created - display mnemonic in prominent box
 			p.MnemonicBox(keyInfo.Mnemonic)
 			fmt.Println()
 
 			// Warning message in yellow
 			fmt.Println(p.Colors.Warning("**Important** Write this mnemonic phrase in a safe place."))
 			fmt.Println(p.Colors.Warning("It is the only way to recover your account if you ever forget your password."))
+			fmt.Println()
+		} else if wasImported {
+			// Key was imported from mnemonic - show success message
+			fmt.Println(p.Colors.Success(fmt.Sprintf("✓ Wallet imported successfully: %s", keyInfo.Name)))
+			fmt.Println(p.Colors.Apply(p.Colors.Theme.Description, "  (Keep your recovery phrase safe - it controls this wallet)"))
 			fmt.Println()
 		} else {
 			// Existing key - show clear status with reminder

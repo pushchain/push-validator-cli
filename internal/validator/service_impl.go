@@ -136,6 +136,82 @@ func extractMnemonic(output string) string {
 	return ""
 }
 
+// ValidateMnemonic performs basic validation of a mnemonic phrase.
+// Returns nil if valid, error with details if invalid.
+func ValidateMnemonic(mnemonic string) error {
+	words := strings.Fields(mnemonic)
+	wordCount := len(words)
+
+	// BIP39 supports 12, 15, 18, 21, or 24 word mnemonics
+	validCounts := map[int]bool{12: true, 15: true, 18: true, 21: true, 24: true}
+	if !validCounts[wordCount] {
+		return fmt.Errorf("invalid mnemonic: expected 12, 15, 18, 21, or 24 words, got %d", wordCount)
+	}
+
+	// Basic character validation (words should be lowercase alphabetic)
+	for i, word := range words {
+		if len(word) < 3 || len(word) > 8 {
+			return fmt.Errorf("invalid word at position %d: '%s' (expected 3-8 characters)", i+1, word)
+		}
+		for _, c := range word {
+			if c < 'a' || c > 'z' {
+				return fmt.Errorf("invalid character in word at position %d: '%s'", i+1, word)
+			}
+		}
+	}
+
+	return nil
+}
+
+// ImportKey imports an existing key from a mnemonic phrase
+func (s *svc) ImportKey(ctx context.Context, name string, mnemonic string) (KeyInfo, error) {
+	if name == "" {
+		return KeyInfo{}, errors.New("key name required")
+	}
+	if mnemonic == "" {
+		return KeyInfo{}, errors.New("mnemonic phrase required")
+	}
+	if s.opts.BinPath == "" {
+		s.opts.BinPath = "pchaind"
+	}
+
+	// Check if key already exists
+	show := exec.CommandContext(ctx, s.opts.BinPath, "keys", "show", name, "-a", "--keyring-backend", s.opts.Keyring, "--home", s.opts.HomeDir)
+	if out, err := show.Output(); err == nil {
+		return KeyInfo{}, fmt.Errorf("key '%s' already exists with address %s", name, strings.TrimSpace(string(out)))
+	}
+
+	// Import key using --recover flag with mnemonic piped via stdin
+	add := exec.CommandContext(ctx, s.opts.BinPath, "keys", "add", name,
+		"--recover",
+		"--keyring-backend", s.opts.Keyring,
+		"--algo", "eth_secp256k1",
+		"--home", s.opts.HomeDir)
+
+	// Pipe mnemonic to stdin
+	add.Stdin = strings.NewReader(mnemonic + "\n")
+
+	output, err := add.CombinedOutput()
+	if err != nil {
+		// Check for common error patterns
+		outStr := string(output)
+		if strings.Contains(outStr, "invalid mnemonic") || strings.Contains(outStr, "invalid checksum") {
+			return KeyInfo{}, errors.New("invalid mnemonic phrase: checksum verification failed")
+		}
+		return KeyInfo{}, fmt.Errorf("key import failed: %w\nOutput: %s", err, outStr)
+	}
+
+	// Get the address of the imported key
+	out2, err := exec.CommandContext(ctx, s.opts.BinPath, "keys", "show", name, "-a", "--keyring-backend", s.opts.Keyring, "--home", s.opts.HomeDir).Output()
+	if err != nil {
+		return KeyInfo{}, fmt.Errorf("failed to get imported key address: %w", err)
+	}
+
+	addr := strings.TrimSpace(string(out2))
+	// Note: We don't return mnemonic for imported keys (user already has it)
+	return s.getKeyInfo(ctx, name, addr, "")
+}
+
 func (s *svc) GetEVMAddress(ctx context.Context, addr string) (string, error) {
 	if addr == "" {
 		return "", errors.New("address required")
