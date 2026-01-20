@@ -530,7 +530,16 @@ func init() {
 	restartCmd.Flags().BoolVar(&restartNoCosmovisor, "no-cosmovisor", false, "Use direct pchaind instead of Cosmovisor")
 	rootCmd.AddCommand(restartCmd)
 
-	rootCmd.AddCommand(&cobra.Command{Use: "logs", Short: "Tail node logs", RunE: func(cmd *cobra.Command, args []string) error { return handleLogs(process.New(loadCfg().HomeDir)) }})
+	rootCmd.AddCommand(&cobra.Command{Use: "logs", Short: "Tail node logs", RunE: func(cmd *cobra.Command, args []string) error {
+		cfg := loadCfg()
+		var sup process.Supervisor
+		if detection := cosmovisor.Detect(cfg.HomeDir); detection.Available {
+			sup = process.NewCosmovisor(cfg.HomeDir)
+		} else {
+			sup = process.New(cfg.HomeDir)
+		}
+		return handleLogs(sup)
+	}})
 
 	rootCmd.AddCommand(&cobra.Command{Use: "reset", Short: "Reset chain data", RunE: func(cmd *cobra.Command, args []string) error {
 		return handleReset(loadCfg(), process.New(loadCfg().HomeDir))
