@@ -8,6 +8,7 @@ import (
 	"math/big"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -18,12 +19,36 @@ import (
 )
 
 // findPchaind returns the path to the pchaind binary, resolving
-// either PCHAIND or PCHAIN_BIN environment variables, or falling
-// back to the literal "pchaind" on PATH.
+// either PCHAIND or PCHAIN_BIN environment variables, checking the
+// cosmovisor genesis directory, or falling back to PATH lookup.
 func findPchaind() string {
     if v := os.Getenv("PCHAIND"); v != "" { return v }
     if v := os.Getenv("PCHAIN_BIN"); v != "" { return v }
+
+    // Check cosmovisor genesis directory (primary location after install.sh)
+    homeDir := os.Getenv("HOME_DIR")
+    if homeDir == "" {
+        if home, err := os.UserHomeDir(); err == nil {
+            homeDir = filepath.Join(home, ".pchain")
+        }
+    }
+    if homeDir != "" {
+        cosmovisorPath := filepath.Join(homeDir, "cosmovisor", "genesis", "bin", "pchaind")
+        if _, err := os.Stat(cosmovisorPath); err == nil {
+            return cosmovisorPath
+        }
+    }
+
     return "pchaind"
+}
+
+// findCosmovisor returns the path to the cosmovisor binary, resolving
+// COSMOVISOR environment variable or falling back to PATH lookup.
+// Returns empty string if not found.
+func findCosmovisor() string {
+    if v := os.Getenv("COSMOVISOR"); v != "" { return v }
+    if path, err := exec.LookPath("cosmovisor"); err == nil { return path }
+    return ""
 }
 
 // getenvDefault returns the environment value for k, or default d

@@ -149,7 +149,7 @@ Configures daily rotation with 14-day retention and compression.
 
 ### File Locations
 - **Manager**: `~/.local/bin/push-validator`
-- **Binary**: `~/.local/bin/pchaind`
+- **Chain Binary**: `~/.pchain/cosmovisor/current/bin/pchaind` (managed by Cosmovisor)
 - **Config**: `~/.pchain/config/`
 - **Data**: `~/.pchain/data/`
 - **Logs**: `~/.pchain/logs/pchaind.log`

@@ -16,6 +16,7 @@ import (
 
 	"github.com/pushchain/push-validator-cli/internal/bootstrap"
 	"github.com/pushchain/push-validator-cli/internal/config"
+	"github.com/pushchain/push-validator-cli/internal/cosmovisor"
 	"github.com/pushchain/push-validator-cli/internal/dashboard"
 	"github.com/pushchain/push-validator-cli/internal/exitcodes"
 	"github.com/pushchain/push-validator-cli/internal/metrics"
@@ -141,6 +142,12 @@ func init() {
 		fmt.Fprintln(w, c.SubHeader("Utilities"))
 		fmt.Fprintln(w, c.FormatCommandAligned("doctor", "Run diagnostic checks", cmdWidth))
 		fmt.Fprintln(w, c.FormatCommandAligned("peers", "Show connected peer information", cmdWidth))
+		fmt.Fprintln(w)
+
+		// Upgrades
+		fmt.Fprintln(w, c.SubHeader("Upgrades"))
+		fmt.Fprintln(w, c.FormatCommandAligned("cosmovisor status", "Show Cosmovisor status", cmdWidth))
+		fmt.Fprintln(w, c.FormatCommandAligned("cosmovisor upgrade-info", "Generate upgrade JSON", cmdWidth))
 		fmt.Fprintln(w)
 	})
 
@@ -270,6 +277,7 @@ func init() {
 	// start (Cobra flags)
 	var startBin string
 	var startNoPrompt bool
+	var startNoCosmovisor bool
 	startCmd := &cobra.Command{
 		Use:   "start",
 		Short: "Start node",
@@ -342,8 +350,26 @@ func init() {
 				}
 			}
 
+			// Determine which supervisor to use (Cosmovisor or direct pchaind)
+			var sup process.Supervisor
+			useCosmovisor := false
+
+			if !startNoCosmovisor {
+				detection := cosmovisor.Detect(cfg.HomeDir)
+				if detection.Available {
+					useCosmovisor = true
+					sup = process.NewCosmovisor(cfg.HomeDir)
+					if flagOutput != "json" && !detection.SetupComplete {
+						p.Info("Initializing Cosmovisor...")
+					}
+				} else {
+					sup = process.New(cfg.HomeDir)
+				}
+			} else {
+				sup = process.New(cfg.HomeDir)
+			}
+
 			// Check if node is already running
-			sup := process.New(cfg.HomeDir)
 			isAlreadyRunning := sup.IsRunning()
 
 			if flagOutput != "json" {
@@ -354,7 +380,11 @@ func init() {
 						p.Success("✓ Node is running")
 					}
 				} else {
-					p.Info("Starting node...")
+					if useCosmovisor {
+						p.Info("Starting node with Cosmovisor...")
+					} else {
+						p.Info("Starting node...")
+					}
 				}
 			}
 
@@ -380,10 +410,14 @@ func init() {
 				return err
 			}
 			if flagOutput == "json" {
-				p.JSON(map[string]any{"ok": true, "action": "start", "already_running": isAlreadyRunning})
+				p.JSON(map[string]any{"ok": true, "action": "start", "already_running": isAlreadyRunning, "cosmovisor": useCosmovisor})
 			} else {
 				if !isAlreadyRunning {
-					p.Success("✓ Node started successfully")
+					if useCosmovisor {
+						p.Success("✓ Node started with Cosmovisor")
+					} else {
+						p.Success("✓ Node started successfully")
+					}
 				}
 
 				// Check validator status and show appropriate next steps (skip if --no-prompt)
@@ -400,18 +434,46 @@ func init() {
 	}
 	startCmd.Flags().StringVar(&startBin, "bin", "", "Path to pchaind binary")
 	startCmd.Flags().BoolVar(&startNoPrompt, "no-prompt", false, "Skip post-start prompts (for use in scripts)")
+	startCmd.Flags().BoolVar(&startNoCosmovisor, "no-cosmovisor", false, "Use direct pchaind instead of Cosmovisor")
 	rootCmd.AddCommand(startCmd)
 
-	rootCmd.AddCommand(&cobra.Command{Use: "stop", Short: "Stop node", RunE: func(cmd *cobra.Command, args []string) error { return handleStop(process.New(loadCfg().HomeDir)) }})
+	rootCmd.AddCommand(&cobra.Command{Use: "stop", Short: "Stop node", RunE: func(cmd *cobra.Command, args []string) error {
+		cfg := loadCfg()
+		// Try to stop Cosmovisor first (it will also handle direct pchaind if running)
+		cosmoSup := process.NewCosmovisor(cfg.HomeDir)
+		if cosmoSup.IsRunning() {
+			return handleStop(cosmoSup)
+		}
+		// Fall back to direct pchaind supervisor
+		return handleStop(process.New(cfg.HomeDir))
+	}})
 
 	var restartBin string
+	var restartNoCosmovisor bool
 	restartCmd := &cobra.Command{Use: "restart", Short: "Restart node", RunE: func(cmd *cobra.Command, args []string) error {
 		cfg := loadCfg()
 		p := getPrinter()
 		if restartBin != "" {
 			os.Setenv("PCHAIND", restartBin)
 		}
-		_, err := process.New(cfg.HomeDir).Restart(process.StartOpts{HomeDir: cfg.HomeDir, Moniker: os.Getenv("MONIKER"), BinPath: findPchaind()})
+
+		// Determine which supervisor to use
+		var sup process.Supervisor
+		useCosmovisor := false
+
+		if !restartNoCosmovisor {
+			detection := cosmovisor.Detect(cfg.HomeDir)
+			if detection.Available {
+				useCosmovisor = true
+				sup = process.NewCosmovisor(cfg.HomeDir)
+			} else {
+				sup = process.New(cfg.HomeDir)
+			}
+		} else {
+			sup = process.New(cfg.HomeDir)
+		}
+
+		_, err := sup.Restart(process.StartOpts{HomeDir: cfg.HomeDir, Moniker: os.Getenv("MONIKER"), BinPath: findPchaind()})
 		if err != nil {
 			ui.PrintError(ui.ErrorMessage{
 				Problem: "Failed to restart node",
@@ -427,9 +489,13 @@ func init() {
 			return err
 		}
 		if flagOutput == "json" {
-			p.JSON(map[string]any{"ok": true, "action": "restart"})
+			p.JSON(map[string]any{"ok": true, "action": "restart", "cosmovisor": useCosmovisor})
 		} else {
-			p.Success("✓ Node restarted")
+			if useCosmovisor {
+				p.Success("✓ Node restarted with Cosmovisor")
+			} else {
+				p.Success("✓ Node restarted")
+			}
 			fmt.Println()
 			fmt.Println(p.Colors.Info("Useful commands:"))
 			fmt.Println(p.Colors.Apply(p.Colors.Theme.Command, "  push-validator status"))
@@ -442,6 +508,7 @@ func init() {
 		return nil
 	}}
 	restartCmd.Flags().StringVar(&restartBin, "bin", "", "Path to pchaind binary")
+	restartCmd.Flags().BoolVar(&restartNoCosmovisor, "no-cosmovisor", false, "Use direct pchaind instead of Cosmovisor")
 	rootCmd.AddCommand(restartCmd)
 
 	rootCmd.AddCommand(&cobra.Command{Use: "logs", Short: "Tail node logs", RunE: func(cmd *cobra.Command, args []string) error { return handleLogs(process.New(loadCfg().HomeDir)) }})
@@ -670,12 +737,34 @@ func handlePostStartFlow(cfg config.Config, p *ui.Printer) bool {
 	// Show status checking message
 	fmt.Println(p.Colors.Info("▸ Checking Validator Status"))
 
-	statusCtx, statusCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	isValidator, err := v.IsValidator(statusCtx, "")
-	statusCancel()
+	// Give the node a moment to fully initialize RPC after sync check
+	time.Sleep(2 * time.Second)
+
+	// Use longer timeout (30s) since IsValidator runs multiple sequential network commands:
+	// 1. show-validator (local) 2. query validators (remote RPC)
+	var isValidator bool
+	var err error
+	maxRetries := 2
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		statusCtx, statusCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		isValidator, err = v.IsValidator(statusCtx, "")
+		statusCancel()
+
+		if err == nil {
+			break
+		}
+
+		// Brief delay before retry
+		if attempt < maxRetries {
+			time.Sleep(2 * time.Second)
+		}
+	}
 
 	if err != nil {
-		// If we can't check status, show warning but continue to dashboard
+		// If we can't check status after retries, show warning but continue to dashboard
+		if flagVerbose {
+			fmt.Printf("  [DEBUG] IsValidator error: %v\n", err)
+		}
 		fmt.Println(p.Colors.Warning("  ⚠ Could not verify validator status (will retry in dashboard)"))
 		showDashboardPrompt(cfg, p)
 		return false

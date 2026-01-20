@@ -85,6 +85,64 @@ node_running() {
     fi
 }
 
+# Helper: Stop all running node processes with verification
+stop_all_processes() {
+    local timeout="${1:-15}"
+
+    step "Stopping any running node processes..."
+
+    # 1. Try graceful stop via manager first
+    if [[ -x "$MANAGER_BIN" ]]; then
+        "$MANAGER_BIN" stop 2>/dev/null || true
+        sleep 2
+    fi
+
+    # 2. Kill cosmovisor processes
+    pkill -f "cosmovisor.*run" 2>/dev/null || true
+
+    # 3. Kill pchaind processes
+    pkill -f "pchaind.*start" 2>/dev/null || true
+
+    # 4. Wait and verify all processes stopped
+    local elapsed=0
+    while [[ $elapsed -lt $timeout ]]; do
+        if ! pgrep -f "cosmovisor.*run" >/dev/null 2>&1 && \
+           ! pgrep -f "pchaind.*start" >/dev/null 2>&1; then
+            ok "All processes stopped"
+            return 0
+        fi
+        sleep 1
+        ((elapsed++))
+    done
+
+    # 5. Force kill if still running
+    verbose "Processes still running, force killing..."
+    pkill -9 -f "cosmovisor.*run" 2>/dev/null || true
+    pkill -9 -f "pchaind.*start" 2>/dev/null || true
+    sleep 1
+
+    # 6. Final check
+    if pgrep -f "cosmovisor.*run" >/dev/null 2>&1 || \
+       pgrep -f "pchaind.*start" >/dev/null 2>&1; then
+        err "Failed to stop all processes"
+        return 1
+    fi
+
+    ok "All processes stopped"
+    return 0
+}
+
+# Helper: Check if any node processes are running (cosmovisor or pchaind)
+any_node_running() {
+    pgrep -f "cosmovisor.*run" >/dev/null 2>&1 && return 0
+    pgrep -f "pchaind.*start" >/dev/null 2>&1 && return 0
+    # Also check via manager status if available
+    if [[ -x "$MANAGER_BIN" ]]; then
+        node_running && return 0
+    fi
+    return 1
+}
+
 # Helper: Check if current node consensus key already exists in validator set
 node_is_validator() {
     local result
@@ -302,6 +360,162 @@ install_go() {
     fi
 }
 
+# Helper: Download pchaind binary from GitHub releases
+download_pchaind() {
+    local os arch version download_url checksum_url temp_dir filename ver_num
+
+    # Detect OS
+    case "$(uname -s)" in
+        Linux) os="linux" ;;
+        Darwin) os="darwin" ;;
+        *)
+            verbose "Unsupported OS for pre-built binary: $(uname -s)"
+            return 1
+            ;;
+    esac
+
+    # Detect architecture
+    case "$(uname -m)" in
+        x86_64|amd64) arch="amd64" ;;
+        aarch64|arm64) arch="arm64" ;;
+        *)
+            verbose "Unsupported architecture for pre-built binary: $(uname -m)"
+            return 1
+            ;;
+    esac
+
+    # Get version (use PCHAIN_REF if it looks like a version tag, otherwise fetch latest stable release)
+    if [[ "$PCHAIN_REF" =~ ^v[0-9] ]]; then
+        version="$PCHAIN_REF"
+        step "Using specified version: $version"
+    else
+        step "Fetching latest release version"
+        if command -v curl >/dev/null 2>&1; then
+            # Only use /releases/latest (stable releases, not pre-releases)
+            version=$(curl -sL https://api.github.com/repos/pushchain/push-chain-node/releases/latest 2>/dev/null | grep '"tag_name"' | head -1 | sed 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
+        fi
+        if [[ -z "$version" ]]; then
+            verbose "Could not determine latest release version (no stable release found)"
+            return 1
+        fi
+        verbose "Latest release: $version"
+    fi
+
+    # Strip 'v' prefix for filename (v0.0.1 -> 0.0.1)
+    ver_num="${version#v}"
+
+    # Build download URL
+    # Format: push-chain_<version>_<os>_<arch>.tar.gz
+    filename="push-chain_${ver_num}_${os}_${arch}.tar.gz"
+    download_url="https://github.com/pushchain/push-chain-node/releases/download/${version}/${filename}"
+    checksum_url="${download_url}.sha256"
+
+    step "Downloading pchaind ${version} for ${os}/${arch}"
+    verbose "URL: $download_url"
+
+    # Create temp directory
+    temp_dir=$(mktemp -d)
+    # Use a subshell trap to clean up temp dir
+    (
+        trap "rm -rf '$temp_dir'" EXIT
+
+        # Download tarball
+        if command -v curl >/dev/null 2>&1; then
+            if ! curl -L --progress-bar -o "$temp_dir/$filename" "$download_url" 2>/dev/null; then
+                verbose "curl download failed"
+                exit 1
+            fi
+        elif command -v wget >/dev/null 2>&1; then
+            if ! wget --show-progress -O "$temp_dir/$filename" "$download_url" 2>/dev/null; then
+                verbose "wget download failed"
+                exit 1
+            fi
+        else
+            verbose "Neither curl nor wget available"
+            exit 1
+        fi
+
+        # Verify file was downloaded and has content
+        if [[ ! -s "$temp_dir/$filename" ]]; then
+            verbose "Downloaded file is empty or missing"
+            exit 1
+        fi
+
+        # Verify checksum (optional but recommended)
+        if curl -sL -o "$temp_dir/checksum.sha256" "$checksum_url" 2>/dev/null && [[ -s "$temp_dir/checksum.sha256" ]]; then
+            step "Verifying checksum"
+            local expected_sum actual_sum
+            expected_sum=$(cat "$temp_dir/checksum.sha256" | awk '{print $1}')
+            if command -v sha256sum >/dev/null 2>&1; then
+                actual_sum=$(sha256sum "$temp_dir/$filename" | awk '{print $1}')
+            elif command -v shasum >/dev/null 2>&1; then
+                actual_sum=$(shasum -a 256 "$temp_dir/$filename" | awk '{print $1}')
+            fi
+            if [[ -n "$actual_sum" && -n "$expected_sum" ]]; then
+                if [[ "$expected_sum" != "$actual_sum" ]]; then
+                    err "Checksum mismatch! Expected: $expected_sum, Got: $actual_sum"
+                    exit 1
+                fi
+                ok "Checksum verified"
+            fi
+        else
+            verbose "Checksum file not available, skipping verification"
+        fi
+
+        # Extract tarball
+        step "Extracting binary"
+        if ! tar -xzf "$temp_dir/$filename" -C "$temp_dir" 2>/dev/null; then
+            verbose "Failed to extract tarball"
+            exit 1
+        fi
+
+        # Find pchaind binary in extracted files
+        local binary
+        binary=$(find "$temp_dir" -name "pchaind" -type f 2>/dev/null | head -1)
+        if [[ -z "$binary" || ! -f "$binary" ]]; then
+            verbose "pchaind binary not found in archive"
+            exit 1
+        fi
+
+        # Install binary directly to cosmovisor genesis directory
+        mkdir -p "$COSMOVISOR_GENESIS_BIN"
+        mkdir -p "$COSMOVISOR_DIR/upgrades"
+        rm -f "$COSMOVISOR_GENESIS_BIN/pchaind" 2>/dev/null || true
+        cp "$binary" "$COSMOVISOR_GENESIS_BIN/pchaind"
+        chmod +x "$COSMOVISOR_GENESIS_BIN/pchaind"
+
+        # Also copy libwasmvm if present (required on macOS)
+        local wasmlib
+        wasmlib=$(find "$temp_dir" -name "libwasmvm.dylib" -type f 2>/dev/null | head -1)
+        if [[ -n "$wasmlib" && -f "$wasmlib" ]]; then
+            rm -f "$COSMOVISOR_GENESIS_BIN/libwasmvm.dylib" 2>/dev/null || true
+            cp "$wasmlib" "$COSMOVISOR_GENESIS_BIN/libwasmvm.dylib"
+        fi
+
+        exit 0
+    )
+    local result=$?
+
+    # Clean up temp dir (in case subshell didn't)
+    rm -rf "$temp_dir" 2>/dev/null || true
+
+    if [[ $result -eq 0 ]]; then
+        # Verify installation
+        if [[ -x "$COSMOVISOR_GENESIS_BIN/pchaind" ]]; then
+            local installed_version
+            installed_version=$("$COSMOVISOR_GENESIS_BIN/pchaind" version 2>&1 | head -1 || echo "")
+            if [[ -n "$installed_version" ]]; then
+                ok "Installed pchaind ($installed_version)"
+            else
+                ok "Installed pchaind ${version}"
+            fi
+            return 0
+        fi
+    fi
+
+    return 1
+}
+
 clean_data_and_preserve_keys() {
     local mode="$1"
     local suffix="${2:-1}"
@@ -512,23 +726,29 @@ else
   INSTALL_BIN_DIR="$BIN_DIR"
   HOME_DIR="${HOME_DIR:-$HOME/.pchain}"
 fi
+
+# Cosmovisor directory structure (binary goes here directly)
+COSMOVISOR_DIR="$HOME_DIR/cosmovisor"
+COSMOVISOR_GENESIS_BIN="$COSMOVISOR_DIR/genesis/bin"
+
 REPO_DIR="$ROOT_DIR/repo"
-PCHAIN_REPO_DIR="$ROOT_DIR/push-chain-node"
 MANAGER_BIN="$INSTALL_BIN_DIR/push-validator"
 
 # Detect what phases are needed BEFORE creating directories
 HAS_RUNNING_NODE="no"
 HAS_EXISTING_INSTALL="no"
 
-# Check if node is running or processes exist
-if [[ -x "$MANAGER_BIN" ]] && command -v "$MANAGER_BIN" >/dev/null 2>&1; then
+# Check if node is running (cosmovisor, pchaind, or via manager status)
+if pgrep -f "cosmovisor.*run" >/dev/null 2>&1; then
+  HAS_RUNNING_NODE="yes"
+elif pgrep -f "pchaind.*start" >/dev/null 2>&1; then
+  HAS_RUNNING_NODE="yes"
+elif [[ -x "$MANAGER_BIN" ]] && command -v "$MANAGER_BIN" >/dev/null 2>&1; then
   # Manager exists, check if node is actually running via status
   STATUS_JSON=$("$MANAGER_BIN" status --output json 2>/dev/null || echo "{}")
   if echo "$STATUS_JSON" | grep -q '"running"[[:space:]]*:[[:space:]]*true'; then
     HAS_RUNNING_NODE="yes"
   fi
-elif pgrep -x pchaind >/dev/null 2>&1 || pgrep -x push-validator >/dev/null 2>&1; then
-  HAS_RUNNING_NODE="yes"
 fi
 
 # Check if installation exists (check for actual installation artifacts, not just config)
@@ -725,39 +945,10 @@ echo
 # Stop any running processes first (only if needed)
 if [[ "$HAS_RUNNING_NODE" = "yes" ]]; then
   next_phase "Stopping Validator Processes"
-if [[ -x "$MANAGER_BIN" ]]; then
-  step "Stopping manager gracefully"
-  "$MANAGER_BIN" stop >/dev/null 2>&1 || true
-  sleep 2
-fi
-# Kill any remaining pchaind processes
-step "Cleaning up remaining processes"
-
-# Try graceful PID-based approach first
-if [[ -x "$MANAGER_BIN" ]]; then
-  TO_CMD=$(timeout_cmd)
-  if [[ -n "$TO_CMD" ]]; then
-    STATUS_JSON=$($TO_CMD 5 "$MANAGER_BIN" status --output json 2>/dev/null || echo "{}")
-  else
-    STATUS_JSON=$("$MANAGER_BIN" status --output json 2>/dev/null || echo "{}")
+  if ! stop_all_processes 15; then
+    err "Could not stop running processes. Please stop them manually and retry."
+    exit 1
   fi
-  if command -v jq >/dev/null 2>&1; then
-    PID=$(echo "$STATUS_JSON" | jq -r '.node.pid // .pid // empty' 2>/dev/null)
-  else
-    PID=$(echo "$STATUS_JSON" | grep -o '"pid"[[:space:]]*:[[:space:]]*[0-9]*' | grep -o '[0-9]*$')
-  fi
-  if [[ -n "$PID" && "$PID" =~ ^[0-9]+$ ]]; then
-    kill -TERM "$PID" 2>/dev/null || true
-    sleep 1
-    kill -KILL "$PID" 2>/dev/null || true
-  fi
-fi
-
-# Fallback: use pkill with exact name matching (POSIX-portable)
-pkill -x pchaind 2>/dev/null || true
-pkill -x push-validator 2>/dev/null || true
-sleep 1
-ok "Stopped all validator processes"
 else
   verbose "No running processes to stop (skipped)"
 fi
@@ -869,54 +1060,30 @@ if [[ -n "$SHELL_CONFIG" ]]; then
   fi
 fi
 
-next_phase "Building Chain Binary"
+next_phase "Installing Chain Binary"
 
-# Clone push-chain-node for building pchaind
-BUILD_SCRIPT="$REPO_DIR/scripts/build-pchaind.sh"
-if [[ -f "$BUILD_SCRIPT" ]]; then
-  step "Cloning push-chain-node (ref: $PCHAIN_REF)"
-  rm -rf "$PCHAIN_REPO_DIR"
-  git clone --quiet --depth 1 --branch "$PCHAIN_REF" https://github.com/pushchain/push-chain-node "$PCHAIN_REPO_DIR"
-
-  step "Building Push Chain binary (Push Node Daemon) from source"
-  # Build from push-chain-node repo
-  BUILD_OUTPUT="$REPO_DIR/scripts/build"
-  if bash "$BUILD_SCRIPT" "$PCHAIN_REPO_DIR" "$BUILD_OUTPUT"; then
-    if [[ -f "$BUILD_OUTPUT/pchaind" ]]; then
-      mkdir -p "$INSTALL_BIN_DIR"
-      ln -sf "$BUILD_OUTPUT/pchaind" "$INSTALL_BIN_DIR/pchaind"
-      export PCHAIND="$INSTALL_BIN_DIR/pchaind"
-
-      # Get binary version
-      BINARY_VERSION=$("$BUILD_OUTPUT/pchaind" version 2>&1 | head -1 || echo "")
-      if [[ -n "$BINARY_VERSION" ]]; then
-        ok "Push Chain binary ready ($BINARY_VERSION)"
-      else
-        ok "Push Chain binary ready"
-      fi
-    else
-      warn "Build completed but binary not found at expected location"
-    fi
-  else
-    warn "Build failed; trying fallback options"
-  fi
+# Download pre-built binary from GitHub releases
+if ! download_pchaind; then
+  err "Failed to download pchaind binary"
+  echo
+  echo "Please check your internet connection and try again."
+  echo "Or download manually from:"
+  echo "  https://github.com/pushchain/push-chain-node/releases"
+  echo
+  exit 1
 fi
-
-# Final fallback to system pchaind
-if [[ -z "$PCHAIND" || ! -f "$PCHAIND" ]]; then
-  if command -v pchaind >/dev/null 2>&1; then
-    step "Using system Push Node Daemon binary"
-    export PCHAIND="$(command -v pchaind)"
-    ok "Found existing Push Node Daemon: $PCHAIND"
-  else
-    err "Push Node Daemon (pchaind) not found"
-    err "Build failed and no system binary available"
-    err "Please ensure the build script works or install manually"
-    exit 1
-  fi
-fi
+export PCHAIND="$COSMOVISOR_GENESIS_BIN/pchaind"
 
 verbose "Using built-in WebSocket monitor (no external dependency)"
+
+# Install Cosmovisor for automatic upgrades (pinned to v1.7.1)
+step "Installing Cosmovisor for automatic upgrades"
+if ! command -v cosmovisor >/dev/null 2>&1; then
+  go install cosmossdk.io/tools/cosmovisor/cmd/cosmovisor@v1.7.1
+  ok "Cosmovisor v1.7.1 installed"
+else
+  ok "Cosmovisor already installed"
+fi
 
 if [[ "$AUTO_START" = "yes" ]]; then
   next_phase "Initializing Node"

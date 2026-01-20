@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/pushchain/push-validator-cli/internal/config"
+	"github.com/pushchain/push-validator-cli/internal/cosmovisor"
 	"github.com/pushchain/push-validator-cli/internal/exitcodes"
 	"github.com/pushchain/push-validator-cli/internal/node"
 	"github.com/pushchain/push-validator-cli/internal/process"
@@ -60,6 +61,7 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 	results = append(results, checkDiskSpace(cfg, c))
 	results = append(results, checkPermissions(cfg, c))
 	results = append(results, checkSyncStatus(cfg, c))
+	results = append(results, checkCosmovisor(cfg, c))
 
 	// Summary
 	fmt.Println()
@@ -328,6 +330,34 @@ func checkSyncStatus(cfg config.Config, c *ui.ColorConfig) checkResult {
 			result.Status = "pass"
 			result.Message = fmt.Sprintf("Node is synced (height: %d)", status.Height)
 		}
+	}
+
+	printCheck(result, c)
+	return result
+}
+
+func checkCosmovisor(cfg config.Config, c *ui.ColorConfig) checkResult {
+	result := checkResult{Name: "Cosmovisor"}
+
+	detection := cosmovisor.Detect(cfg.HomeDir)
+
+	if !detection.Available {
+		result.Status = "warn"
+		result.Message = "Cosmovisor not installed (optional)"
+		result.Details = []string{
+			"Install with: go install cosmossdk.io/tools/cosmovisor/cmd/cosmovisor@latest",
+			"Cosmovisor enables automatic binary upgrades",
+		}
+	} else if !detection.SetupComplete {
+		result.Status = "warn"
+		result.Message = "Cosmovisor installed but not initialized"
+		result.Details = []string{
+			"Will auto-initialize on next 'push-validator start'",
+			"Or check status with: push-validator cosmovisor status",
+		}
+	} else {
+		result.Status = "pass"
+		result.Message = "Cosmovisor configured and ready"
 	}
 
 	printCheck(result, c)
