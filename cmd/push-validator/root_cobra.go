@@ -975,8 +975,8 @@ func checkForUpdateBackground() {
 	// Check cache first (avoid network calls if recently checked)
 	cache, err := update.LoadCache(cfg.HomeDir)
 	if err == nil && update.IsCacheValid(cache) {
-		// Use cached result
-		if cache.UpdateAvailable {
+		// Use cached result, but re-verify in case version changed (e.g., after update)
+		if cache.UpdateAvailable && update.IsNewerVersion(Version, cache.LatestVersion) {
 			updateCheckResult = &update.CheckResult{
 				CurrentVersion:  strings.TrimPrefix(Version, "v"),
 				LatestVersion:   cache.LatestVersion,

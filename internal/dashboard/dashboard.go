@@ -669,7 +669,8 @@ func (m *Dashboard) fetchData(ctx context.Context) (DashboardData, error) {
 	}
 
 	// Check for CLI update (uses cache, no network call)
-	if cache, err := update.LoadCache(m.opts.Config.HomeDir); err == nil && cache.UpdateAvailable {
+	// Re-verify version comparison in case CLI was updated since cache was written
+	if cache, err := update.LoadCache(m.opts.Config.HomeDir); err == nil && cache.UpdateAvailable && update.IsNewerVersion(m.opts.CLIVersion, cache.LatestVersion) {
 		data.UpdateInfo.Available = true
 		data.UpdateInfo.LatestVersion = cache.LatestVersion
 	}

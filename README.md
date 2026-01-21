@@ -2,7 +2,7 @@
 
 **Fast validator setup for Push Chain**
 
-## 🚀 Quick Start (1-2 minutes)
+## 🚀 Quick Start
 
 ### Step 1: Install & Start
 ```bash
@@ -16,7 +16,7 @@ Automatically installs and starts your validator using state sync (no full sync 
 ```bash
 push-validator status
 ```
-Wait for: `✅ Catching Up: false` (takes ~1-2 minutes with state sync)
+Wait for: `✅ Catching Up: false` (state sync takes ~1 hour, then block sync begins)
 
 ### Step 3: Register Validator
 ```bash
@@ -75,7 +75,7 @@ The dashboard provides everything you need to monitor validator health and perfo
 
 ### Core
 ```bash
-push-validator start                # Start with state sync (2-3 min)
+push-validator start                # Start node with state sync
 push-validator stop                 # Stop node
 push-validator status               # Check sync & validator status
 push-validator dashboard            # Live interactive monitoring dashboard
@@ -111,11 +111,24 @@ push-validator update          # Update CLI to latest version
 
 ## ⚡ Features
 
-- **State Sync**: 1-2 minute setup (no full blockchain download)
+- **State Sync**: ~1 hour sync (no full blockchain download required)
 - **Interactive Logs**: Real-time log viewer with search and filtering
 - **Smart Detection**: Monitors for sync stalls and network issues
 - **Reliable Snapshots**: Uses trusted RPC nodes for recovery
 - **Multiple Outputs**: JSON, YAML, or text format support
+
+## 🔧 Troubleshooting
+
+### State Sync Failures / App Mismatch Errors
+
+If you encounter state sync failures or app hash mismatch errors, reset and restart:
+
+```bash
+push-validator reset
+push-validator start
+```
+
+This clears the chain data and initiates a fresh state sync. State sync takes approximately 1 hour, after which block sync will begin automatically.
 
 ## 📊 Network
 
