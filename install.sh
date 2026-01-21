@@ -1255,6 +1255,36 @@ if [[ "$AUTO_START" = "yes" ]]; then
       --snapshot-rpc "$SNAPSHOT_RPC" \
       --bin "${PCHAIND:-pchaind}" || { err "init failed"; exit 1; }
     ok "Node initialized"
+
+    # Optimize config for faster state sync
+    step "Optimizing node configuration"
+    APP_TOML="$HOME_DIR/config/app.toml"
+    CONFIG_TOML="$HOME_DIR/config/config.toml"
+
+    if [[ -f "$APP_TOML" ]]; then
+      # Increase IAVL cache size for faster state sync (default: 781250 -> 2000000)
+      sed -i.bak 's/^iavl-cache-size = .*/iavl-cache-size = 2000000/' "$APP_TOML" 2>/dev/null || \
+        sed -i '' 's/^iavl-cache-size = .*/iavl-cache-size = 2000000/' "$APP_TOML" 2>/dev/null || true
+      rm -f "$APP_TOML.bak" 2>/dev/null || true
+    fi
+
+    if [[ -f "$CONFIG_TOML" ]]; then
+      # Increase peer limits for more chunk sources
+      sed -i.bak 's/^max_num_inbound_peers = .*/max_num_inbound_peers = 100/' "$CONFIG_TOML" 2>/dev/null || \
+        sed -i '' 's/^max_num_inbound_peers = .*/max_num_inbound_peers = 100/' "$CONFIG_TOML" 2>/dev/null || true
+      sed -i.bak 's/^max_num_outbound_peers = .*/max_num_outbound_peers = 50/' "$CONFIG_TOML" 2>/dev/null || \
+        sed -i '' 's/^max_num_outbound_peers = .*/max_num_outbound_peers = 50/' "$CONFIG_TOML" 2>/dev/null || true
+      # Increase transfer rates for faster data transfer
+      sed -i.bak 's/^send_rate = .*/send_rate = 10240000/' "$CONFIG_TOML" 2>/dev/null || \
+        sed -i '' 's/^send_rate = .*/send_rate = 10240000/' "$CONFIG_TOML" 2>/dev/null || true
+      sed -i.bak 's/^recv_rate = .*/recv_rate = 10240000/' "$CONFIG_TOML" 2>/dev/null || \
+        sed -i '' 's/^recv_rate = .*/recv_rate = 10240000/' "$CONFIG_TOML" 2>/dev/null || true
+      # Disable tx indexer during sync for less disk I/O
+      sed -i.bak 's/^indexer = .*/indexer = "null"/' "$CONFIG_TOML" 2>/dev/null || \
+        sed -i '' 's/^indexer = .*/indexer = "null"/' "$CONFIG_TOML" 2>/dev/null || true
+      rm -f "$CONFIG_TOML.bak" 2>/dev/null || true
+    fi
+    ok "Configuration optimized"
   else
     step "Configuration exists, skipping init"
   fi

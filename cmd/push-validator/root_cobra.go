@@ -262,8 +262,7 @@ func init() {
 				Moniker:              initMoniker,
 				GenesisDomain:        cfg.GenesisDomain,
 				BinPath:              findPchaind(),
-				SnapshotRPCPrimary:   initSnapshotRPC,
-				SnapshotRPCSecondary: "https://donut.rpc.push.org",
+				SnapshotRPC: initSnapshotRPC,
 				Progress:             progressCallback,
 			}); err != nil {
 				ui.PrintError(ui.ErrorMessage{
@@ -343,8 +342,7 @@ func init() {
 					Moniker:              getenvDefault("MONIKER", "push-validator"),
 					GenesisDomain:        cfg.GenesisDomain,
 					BinPath:              findPchaind(),
-					SnapshotRPCPrimary:   cfg.SnapshotRPC,
-					SnapshotRPCSecondary: "https://donut.rpc.push.org",
+					SnapshotRPC: cfg.SnapshotRPC,
 					Progress:             progressCallback,
 				}); err != nil {
 					ui.PrintError(ui.ErrorMessage{

@@ -217,7 +217,7 @@ func (s *CosmovisorSupervisor) Start(opts StartOpts) (int, error) {
 	args := []string{
 		"run", "start",
 		"--home", opts.HomeDir,
-		"--pruning=nothing",
+		"--pruning=everything",
 		"--minimum-gas-prices=1000000000upc",
 		"--rpc.laddr=tcp://0.0.0.0:26657",
 		"--json-rpc.address=0.0.0.0:8545",

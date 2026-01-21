@@ -38,8 +38,7 @@ type Options struct {
 	Denom                string       // e.g., upc
 	GenesisDomain        string       // e.g., donut.rpc.push.org
 	BinPath              string       // pchaind path
-	SnapshotRPCPrimary   string       // e.g., https://donut.rpc.push.org
-	SnapshotRPCSecondary string       // optional; if empty uses primary
+	SnapshotRPC string // e.g., https://donut.rpc.push.org
 	Progress             func(string) // optional callback for progress messages
 }
 
@@ -154,10 +153,10 @@ func (s *svc) Init(ctx context.Context, opts Options) error {
 	progress("Using fullnode peers for state sync...")
 	peers := fullnodePeers
 
-	// Set snapshot RPC primary (use first fullnode)
-	snapPrimary := opts.SnapshotRPCPrimary
-	if snapPrimary == "" {
-		snapPrimary = fullnodeRPCs[0]
+	// Set snapshot RPC (use first fullnode if not specified)
+	snapshotRPC := opts.SnapshotRPC
+	if snapshotRPC == "" {
+		snapshotRPC = fullnodeRPCs[0]
 	}
 
 	// Configure peers via config store
@@ -179,34 +178,15 @@ func (s *svc) Init(ctx context.Context, opts Options) error {
 		}
 	}
 
-	// Configure state sync parameters using snapshot RPC (reuse variable from above)
+	// Configure state sync parameters using snapshot RPC
 	progress("Configuring state sync parameters...")
-	tp, err := s.stp.ComputeTrust(ctx, snapPrimary)
+	tp, err := s.stp.ComputeTrust(ctx, snapshotRPC)
 	if err != nil {
 		return fmt.Errorf("compute trust params: %w", err)
 	}
-	// Build and filter RPC servers to those that accept JSON-RPC POST (light client requirement)
-	// Add both primary and secondary (fallback to node1 if secondary not provided)
-	candidates := []string{hostToStateSyncURL(snapPrimary)}
-	snapSecondary := opts.SnapshotRPCSecondary
-	if snapSecondary == "" {
-		// Default to fullnode-2 as secondary witness if not specified
-		snapSecondary = fullnodeRPCs[1]
-	}
-	if snapSecondary != snapPrimary {
-		candidates = append(candidates, hostToStateSyncURL(snapSecondary))
-	}
-
-	rpcServers := s.pickWorkingRPCs(ctx, candidates)
-	if len(rpcServers) == 0 {
-		return fmt.Errorf("no working RPC servers for state sync (JSON-RPC POST failed)")
-	}
-	// Ensure we provide two entries (primary + witness). Only duplicate as last resort.
-	if len(rpcServers) == 1 {
-		// Try adding fullnode-2 as fallback
-		fallback := "http://34.72.243.200:26657" // fullnode-2
-		rpcServers = append(rpcServers, fallback)
-	}
+	// Build RPC servers list (state sync requires at least 2 entries for verification)
+	rpcURL := hostToStateSyncURL(snapshotRPC)
+	rpcServers := []string{rpcURL, rpcURL} // Duplicate single endpoint for 2-entry requirement
 	progress("Backing up configuration...")
 	if _, err := cfgs.Backup(); err == nil { /* best-effort */
 	}
