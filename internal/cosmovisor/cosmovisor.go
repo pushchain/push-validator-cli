@@ -122,7 +122,7 @@ func (s *service) EnvVars() map[string]string {
 		EnvDaemonHome:            s.homeDir,
 		EnvAllowDownloadBinaries: "true",
 		EnvRestartAfterUpgrade:   "true",
-		EnvUnsafeSkipBackup:      "false",
+		EnvUnsafeSkipBackup:      "true", // Skip backup to avoid DAEMON_DATA_BACKUP_DIR requirement
 	}
 }
 
