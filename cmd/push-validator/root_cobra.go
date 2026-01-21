@@ -540,10 +540,24 @@ func init() {
 	}})
 
 	rootCmd.AddCommand(&cobra.Command{Use: "reset", Short: "Reset chain data", RunE: func(cmd *cobra.Command, args []string) error {
-		return handleReset(loadCfg(), process.New(loadCfg().HomeDir))
+		cfg := loadCfg()
+		var sup process.Supervisor
+		if detection := cosmovisor.Detect(cfg.HomeDir); detection.Available {
+			sup = process.NewCosmovisor(cfg.HomeDir)
+		} else {
+			sup = process.New(cfg.HomeDir)
+		}
+		return handleReset(cfg, sup)
 	}})
 	rootCmd.AddCommand(&cobra.Command{Use: "full-reset", Short: "Complete reset (deletes all keys and data)", RunE: func(cmd *cobra.Command, args []string) error {
-		return handleFullReset(loadCfg(), process.New(loadCfg().HomeDir))
+		cfg := loadCfg()
+		var sup process.Supervisor
+		if detection := cosmovisor.Detect(cfg.HomeDir); detection.Available {
+			sup = process.NewCosmovisor(cfg.HomeDir)
+		} else {
+			sup = process.New(cfg.HomeDir)
+		}
+		return handleFullReset(cfg, sup)
 	}})
 	rootCmd.AddCommand(&cobra.Command{Use: "backup", Short: "Backup config and validator state", RunE: func(cmd *cobra.Command, args []string) error { return handleBackup(loadCfg()) }})
 	validatorsCmd := &cobra.Command{Use: "validators", Short: "List validators", RunE: func(cmd *cobra.Command, args []string) error {

@@ -42,10 +42,7 @@ func Reset(opts ResetOptions) error {
     // Remove entire data directory (ALL blockchain data including all databases)
     _ = os.RemoveAll(filepath.Join(opts.HomeDir, "data"))
 
-    // Remove logs directory
-    _ = os.RemoveAll(filepath.Join(opts.HomeDir, "logs"))
-
-    // Recreate essential directories
+    // Recreate essential directories (keep logs - useful for debugging)
     _ = os.MkdirAll(filepath.Join(opts.HomeDir, "data"), 0o755)
     _ = os.MkdirAll(filepath.Join(opts.HomeDir, "logs"), 0o755)
 
@@ -74,13 +71,10 @@ func FullReset(opts FullResetOptions) error {
     _ = os.Remove(filepath.Join(opts.HomeDir, "config", "priv_validator_key.json"))
     _ = os.Remove(filepath.Join(opts.HomeDir, "config", "node_key.json"))
 
-    // Remove logs
-    _ = os.RemoveAll(filepath.Join(opts.HomeDir, "logs"))
-
     // Clean address book
     _ = os.Remove(filepath.Join(opts.HomeDir, "config", "addrbook.json"))
 
-    // Recreate essential directories
+    // Recreate essential directories (keep logs - useful for debugging)
     _ = os.MkdirAll(filepath.Join(opts.HomeDir, "data"), 0o755)
     _ = os.MkdirAll(filepath.Join(opts.HomeDir, "logs"), 0o755)
 
