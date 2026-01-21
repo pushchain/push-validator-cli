@@ -14,6 +14,7 @@ import (
 	"golang.org/x/term"
 	"gopkg.in/yaml.v3"
 
+	"github.com/pushchain/push-validator-cli/internal/admin"
 	"github.com/pushchain/push-validator-cli/internal/bootstrap"
 	"github.com/pushchain/push-validator-cli/internal/config"
 	"github.com/pushchain/push-validator-cli/internal/cosmovisor"
@@ -734,24 +735,82 @@ func handlePostStartFlow(cfg config.Config, p *ui.Printer) bool {
 		fmt.Println(p.Colors.Info("▸ Monitoring Sync Progress"))
 
 		// Wait for sync to complete using sync monitor
-		sup := process.New(cfg.HomeDir)
+		// Use correct supervisor based on whether Cosmovisor is available (determines log path)
+		var sup process.Supervisor
+		if detection := cosmovisor.Detect(cfg.HomeDir); detection.Available {
+			sup = process.NewCosmovisor(cfg.HomeDir)
+		} else {
+			sup = process.New(cfg.HomeDir)
+		}
 		remoteURL := "https://" + strings.TrimSuffix(cfg.GenesisDomain, "/") + ":443"
 
-		if err := syncmon.Run(context.Background(), syncmon.Options{
-			LocalRPC:     "http://127.0.0.1:26657",
-			RemoteRPC:    remoteURL,
-			LogPath:      sup.LogPath(),
-			Window:       30,
-			Compact:      false,
-			Out:          os.Stdout,
-			Interval:     120 * time.Millisecond,
-			Quiet:        flagQuiet,
-			Debug:        flagDebug,
-			StuckTimeout: 2 * time.Minute,
+		// Create reset function for retry logic
+		resetFunc := func() error {
+			fmt.Println(p.Colors.Info("    Stopping node..."))
+			if err := sup.Stop(); err != nil {
+				// Ignore stop errors - node might not be running
+			}
+			time.Sleep(2 * time.Second)
+
+			fmt.Println(p.Colors.Info("    Clearing data..."))
+			if err := admin.Reset(admin.ResetOptions{
+				HomeDir:      cfg.HomeDir,
+				BinPath:      findPchaind(),
+				KeepAddrBook: true,
+			}); err != nil {
+				return fmt.Errorf("reset failed: %w", err)
+			}
+
+			// Recreate priv_validator_state.json
+			pvs := filepath.Join(cfg.HomeDir, "data", "priv_validator_state.json")
+			if err := os.WriteFile(pvs, []byte("{\n  \"height\": \"0\",\n  \"round\": 0,\n  \"step\": 0\n}\n"), 0o644); err != nil {
+				return fmt.Errorf("failed to create priv_validator_state.json: %w", err)
+			}
+
+			fmt.Println(p.Colors.Info("    Restarting node..."))
+			_, err := sup.Start(process.StartOpts{
+				HomeDir: cfg.HomeDir,
+				Moniker: os.Getenv("MONIKER"),
+				BinPath: findPchaind(),
+			})
+			if err != nil {
+				return fmt.Errorf("restart failed: %w", err)
+			}
+			time.Sleep(5 * time.Second) // Give node time to initialize
+			return nil
+		}
+
+		// Create reconfigure function to get fresh trust parameters
+		reconfigFunc := func() error {
+			fmt.Println(p.Colors.Info("    Refreshing state sync parameters..."))
+			svc := bootstrap.New()
+			return svc.ReconfigureStateSync(context.Background(), bootstrap.Options{
+				HomeDir:     cfg.HomeDir,
+				SnapshotRPC: "", // Use default fullnode RPC
+			})
+		}
+
+		if err := syncmon.RunWithRetry(context.Background(), syncmon.RetryOptions{
+			Options: syncmon.Options{
+				LocalRPC:     "http://127.0.0.1:26657",
+				RemoteRPC:    remoteURL,
+				LogPath:      sup.LogPath(),
+				Window:       30,
+				Compact:      false,
+				Out:          os.Stdout,
+				Interval:     120 * time.Millisecond,
+				Quiet:        flagQuiet,
+				Debug:        flagDebug,
+				StuckTimeout: 30 * time.Minute, // Detect stuck sync
+			},
+			MaxRetries:   3,
+			ResetFunc:    resetFunc,
+			ReconfigFunc: reconfigFunc,
 		}); err != nil {
-			// Sync failed or stuck - show warning and dashboard
+			// Sync failed after retries - show warning and dashboard
 			fmt.Println()
-			fmt.Println(p.Colors.Warning("  ⚠ Sync monitoring error (will retry in dashboard)"))
+			fmt.Println(p.Colors.Warning("  ⚠ Sync failed after retries"))
+			fmt.Println(p.Colors.Apply(p.Colors.Theme.Description, "    Try: push-validator reset && push-validator start"))
 			showDashboardPrompt(cfg, p)
 			return false
 		}

@@ -44,6 +44,7 @@ type Options struct {
 
 type Service interface {
 	Init(ctx context.Context, opts Options) error
+	ReconfigureStateSync(ctx context.Context, opts Options) error
 }
 
 // HTTPDoer matches http.Client's Do.
@@ -184,9 +185,11 @@ func (s *svc) Init(ctx context.Context, opts Options) error {
 	if err != nil {
 		return fmt.Errorf("compute trust params: %w", err)
 	}
-	// Build RPC servers list (state sync requires at least 2 entries for verification)
-	rpcURL := hostToStateSyncURL(snapshotRPC)
-	rpcServers := []string{rpcURL, rpcURL} // Duplicate single endpoint for 2-entry requirement
+	// Build RPC servers list using all available fullnode RPCs for better distribution
+	var rpcServers []string
+	for _, rpc := range fullnodeRPCs {
+		rpcServers = append(rpcServers, hostToStateSyncURL(rpc))
+	}
 	progress("Backing up configuration...")
 	if _, err := cfgs.Backup(); err == nil { /* best-effort */
 	}
@@ -197,7 +200,7 @@ func (s *svc) Init(ctx context.Context, opts Options) error {
 		RPCServers:          rpcServers,
 		TrustPeriod:         "336h0m0s",
 		ChunkFetchers:       12,      // Aggressive: 3x parallel downloads for faster sync
-		ChunkRequestTimeout: "15m0s", // Generous timeout for congested networks
+		ChunkRequestTimeout: "60m0s", // Extended timeout for slow/congested networks
 		DiscoveryTime:       "90s",   // More time to discover all available snapshots
 	}); err != nil {
 		return err
@@ -210,6 +213,42 @@ func (s *svc) Init(ctx context.Context, opts Options) error {
 	_ = os.WriteFile(filepath.Join(opts.HomeDir, ".initial_state_sync"), []byte(time.Now().Format(time.RFC3339)), 0o644)
 
 	return nil
+}
+
+// ReconfigureStateSync updates state sync configuration with fresh trust parameters.
+// This is used during retry logic when the previous sync attempt failed.
+func (s *svc) ReconfigureStateSync(ctx context.Context, opts Options) error {
+	if opts.HomeDir == "" {
+		return errors.New("HomeDir required")
+	}
+
+	snapshotRPC := opts.SnapshotRPC
+	if snapshotRPC == "" {
+		snapshotRPC = fullnodeRPCs[0]
+	}
+
+	// Compute fresh trust parameters
+	tp, err := s.stp.ComputeTrust(ctx, snapshotRPC)
+	if err != nil {
+		return fmt.Errorf("compute trust params: %w", err)
+	}
+
+	// Build RPC servers list using all available fullnode RPCs for better distribution
+	var rpcServers []string
+	for _, rpc := range fullnodeRPCs {
+		rpcServers = append(rpcServers, hostToStateSyncURL(rpc))
+	}
+
+	cfgs := files.New(opts.HomeDir)
+	return cfgs.EnableStateSync(files.StateSyncParams{
+		TrustHeight:         tp.Height,
+		TrustHash:           tp.Hash,
+		RPCServers:          rpcServers,
+		TrustPeriod:         "336h0m0s",
+		ChunkFetchers:       12,
+		ChunkRequestTimeout: "60m0s",
+		DiscoveryTime:       "90s",
+	})
 }
 
 // ---- helpers ----
