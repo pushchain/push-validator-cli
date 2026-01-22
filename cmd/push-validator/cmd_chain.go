@@ -102,10 +102,15 @@ Examples:
 				if flagOutput != "json" {
 					fmt.Println("  → Verifying checksum")
 				}
-				if err := installer.VerifyChecksum(archiveData, release, asset.Name); err != nil {
+				verified, err := installer.VerifyChecksum(archiveData, release, asset.Name)
+				if err != nil {
 					return fmt.Errorf("checksum verification failed: %w", err)
 				}
-				fmt.Printf("  %s Checksum verified\n", p.Colors.Success("✓"))
+				if verified {
+					fmt.Printf("  %s Checksum verified\n", p.Colors.Success("✓"))
+				} else {
+					fmt.Printf("  %s Checksum file not available, skipping verification\n", p.Colors.Warning("⚠"))
+				}
 			}
 
 			// Extract and install

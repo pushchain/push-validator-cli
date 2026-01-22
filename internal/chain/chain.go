@@ -204,19 +204,29 @@ func (pr *progressReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// VerifyChecksum validates the downloaded archive
-func (inst *Installer) VerifyChecksum(data []byte, release *Release, assetName string) error {
+// VerifyChecksum validates the downloaded archive.
+// Returns (verified bool, err error):
+//   - (true, nil): checksum verified successfully
+//   - (false, nil): checksum file not found, verification skipped
+//   - (false, err): checksum mismatch or download error
+func (inst *Installer) VerifyChecksum(data []byte, release *Release, assetName string) (bool, error) {
 	checksumAsset, err := GetChecksumAsset(release, assetName)
 	if err != nil {
-		return err
+		// Checksum file not found in release - skip verification gracefully
+		return false, nil
 	}
 
 	// Download checksum file
 	resp, err := http.Get(checksumAsset.BrowserDownloadURL)
 	if err != nil {
-		return fmt.Errorf("failed to download checksum: %w", err)
+		return false, fmt.Errorf("failed to download checksum: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode == http.StatusNotFound {
+		// Checksum file URL returned 404 - skip verification gracefully
+		return false, nil
+	}
 
 	// Parse checksum file (format: "sha256  filename" or just "sha256")
 	var expectedHash string
@@ -234,7 +244,7 @@ func (inst *Installer) VerifyChecksum(data []byte, release *Release, assetName s
 	}
 
 	if expectedHash == "" {
-		return fmt.Errorf("could not parse checksum file")
+		return false, fmt.Errorf("could not parse checksum file")
 	}
 
 	// Calculate actual hash
@@ -242,10 +252,10 @@ func (inst *Installer) VerifyChecksum(data []byte, release *Release, assetName s
 	actualHash := hex.EncodeToString(hash[:])
 
 	if actualHash != expectedHash {
-		return fmt.Errorf("checksum mismatch: expected %s, got %s", expectedHash, actualHash)
+		return false, fmt.Errorf("checksum mismatch: expected %s, got %s", expectedHash, actualHash)
 	}
 
-	return nil
+	return true, nil
 }
 
 // ExtractAndInstall extracts the binary and installs to cosmovisor directory
