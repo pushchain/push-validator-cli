@@ -25,6 +25,11 @@ if [[ -n "$NO_COLOR" ]] || [[ ! -t 1 ]]; then
     CYAN=''; GREEN=''; YELLOW=''; RED=''; BOLD=''; DIM=''; NC=''
 fi
 
+# Prevent terminal background color queries from polluting output
+# This tells charmbracelet/termenv libraries the background color,
+# avoiding OSC 11 queries that cause ^[]11;rgb:... responses in iTerm2
+export COLORFGBG="${COLORFGBG:-0;15}"
+
 status() { echo -e "${CYAN}$*${NC}"; }
 ok()     {
     if [[ $PHASE_START_TIME -gt 0 ]]; then
@@ -41,11 +46,16 @@ ok()     {
         echo -e "  ${GREEN}✓ $*${NC}"
     fi
 }
+ok_sub() { echo -e "    ${GREEN}✓ $*${NC}"; }  # 4-space indent for nested sub-items
 warn()   { echo -e "  ${YELLOW}⚠ $*${NC}"; }
 err()    { echo -e "  ${RED}✗ $*${NC}"; }
 phase()  { echo -e "\n${BOLD}${CYAN}▸ $*${NC}"; }
 step()   { echo -e "  ${DIM}→${NC} $*"; }
+step_sub() { echo -e "    ${DIM}→${NC} $*"; }  # 4-space indent for nested sub-steps
 verbose() { [[ "$VERBOSE" = "yes" ]] && echo -e "  ${DIM}$*${NC}" || true; }
+
+# Helper: Shorten path for display (replace $HOME with ~)
+short_path() { echo "${1/#$HOME/\~}"; }
 
 # Helper: Indent output lines (adds 2-space prefix)
 indent_output() {

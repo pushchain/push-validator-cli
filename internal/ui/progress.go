@@ -9,6 +9,14 @@ import (
 	"golang.org/x/term"
 )
 
+// flushStdin discards any pending input from stdin to prevent
+// terminal response sequences (like cursor position reports, focus events)
+// from corrupting the output. Uses timeout-based flushing to catch
+// asynchronous terminal responses.
+func flushStdin() {
+	FlushStdinWithTimeout(30 * time.Millisecond)
+}
+
 // Spinner is a tiny terminal spinner helper.
 type Spinner struct {
     frames []rune
@@ -72,6 +80,17 @@ func NewProgressBar(out io.Writer, total int64) *ProgressBar {
 	isTTY := false
 	if f, ok := out.(*os.File); ok {
 		isTTY = term.IsTerminal(int(f.Fd()))
+	}
+
+	// Disable terminal focus reporting to prevent ^[[I/^[[O sequences
+	// and flush any pending terminal responses that could corrupt output
+	if isTTY {
+		// Disable focus reporting (CSI ? 1004 l)
+		fmt.Fprint(out, "\033[?1004l")
+		// Small delay to allow any pending terminal responses to arrive
+		time.Sleep(10 * time.Millisecond)
+		// Flush any pending terminal responses from stdin
+		flushStdin()
 	}
 
 	return &ProgressBar{
@@ -181,7 +200,7 @@ func (p *ProgressBar) renderTTY(pct float64) {
 
 	// Format output with ANSI escape to clear rest of line (fixes /s/s bug)
 	// \033[K clears from cursor to end of line
-	fmt.Fprintf(p.out, "\r%s[%s] %5.1f%%  %s/%s  %s  ETA %s\033[K",
+	fmt.Fprintf(p.out, "\r%s[%s] %5.1f%%   %s/%s   %s   ETA %s\033[K",
 		p.indent,
 		bar,
 		pct,
@@ -218,6 +237,8 @@ func (p *ProgressBar) Finish() {
 			p.renderTTY(100)
 		}
 		fmt.Fprintln(p.out)
+		// Flush any pending terminal responses that accumulated during progress updates
+		flushStdin()
 	} else if p.total > 0 && p.lastPct < 100 {
 		// Ensure we print 100% for non-TTY
 		fmt.Fprintf(p.out, "%sDownloading... 100%%\n", p.indent)

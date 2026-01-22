@@ -51,8 +51,12 @@ Examples:
 			noCache, _ := cmd.Flags().GetBool("no-cache")
 
 			if flagOutput != "json" {
-				fmt.Printf("     Source: %s\n", snapshotURL)
-				fmt.Printf("     Cache: %s/%s\n", cfg.HomeDir, snapshot.CacheDir)
+				dim, reset := "\033[2m", "\033[0m"
+				if os.Getenv("NO_COLOR") != "" {
+					dim, reset = "", ""
+				}
+				fmt.Printf("  %s%-12s %s%s\n", dim, "Source:", ui.ShortenPath(snapshotURL), reset)
+				fmt.Printf("  %s%-12s %s%s\n", dim, "Cache:", ui.ShortenPath(cfg.HomeDir+"/"+snapshot.CacheDir), reset)
 			}
 
 			// Create progress bar callback
@@ -69,7 +73,7 @@ Examples:
 				case snapshot.PhaseDownload:
 					if bar == nil && total > 0 {
 						bar = ui.NewProgressBar(os.Stdout, total)
-						bar.SetIndent("     ") // 5-space indent to align with Source/Cache
+						bar.SetIndent("  ") // 2-space indent to align with Source/Cache
 					}
 					if bar != nil {
 						bar.Update(current)
@@ -138,8 +142,12 @@ Examples:
 			}
 
 			if flagOutput != "json" {
-				fmt.Printf("     Cache: %s/%s\n", cfg.HomeDir, snapshot.CacheDir)
-				fmt.Printf("     Destination: %s\n", targetDir)
+				dim, reset := "\033[2m", "\033[0m"
+				if os.Getenv("NO_COLOR") != "" {
+					dim, reset = "", ""
+				}
+				fmt.Printf("  %s%-12s %s%s\n", dim, "Cache:", ui.ShortenPath(cfg.HomeDir+"/"+snapshot.CacheDir), reset)
+				fmt.Printf("  %s%-12s %s%s\n", dim, "Destination:", ui.ShortenPath(targetDir), reset)
 			}
 
 			// Create progress callback
@@ -148,7 +156,7 @@ Examples:
 					return
 				}
 				if phase == snapshot.PhaseExtract && message != "" {
-					fmt.Printf("\r     → Extracting: %-60s", truncate(message, 60))
+					fmt.Printf("\r  → Extracting: %-60s", truncate(message, 60))
 				}
 			}
 

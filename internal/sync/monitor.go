@@ -150,10 +150,10 @@ func Run(ctx context.Context, opts Options) error {
 					if tty {
 						extra := ""
 						if lastPeers > 0 {
-							extra += fmt.Sprintf(" | peers: %d", lastPeers)
+							extra += fmt.Sprintf("  peers: %d", lastPeers)
 						}
 						if lastLatency > 0 {
-							extra += fmt.Sprintf(" | rtt: %dms", lastLatency)
+							extra += fmt.Sprintf("  rtt: %dms", lastLatency)
 						}
 						fmt.Fprintf(opts.Out, "\r\033[K  %s%s", lineWithETA, extra)
 					} else {
@@ -236,10 +236,10 @@ func Run(ctx context.Context, opts Options) error {
 			if tty {
 				extra := ""
 				if lastPeers > 0 {
-					extra += fmt.Sprintf(" | peers: %d", lastPeers)
+					extra += fmt.Sprintf("  peers: %d", lastPeers)
 				}
 				if lastLatency > 0 {
-					extra += fmt.Sprintf(" | rtt: %dms", lastLatency)
+					extra += fmt.Sprintf("  rtt: %dms", lastLatency)
 				}
 				fmt.Fprintf(opts.Out, "\r\033[K  %s%s", lineWithETA, extra)
 			} else {
@@ -307,10 +307,10 @@ func Run(ctx context.Context, opts Options) error {
 					if tty {
 						extra := ""
 						if lastPeers > 0 {
-							extra += fmt.Sprintf(" | peers: %d", lastPeers)
+							extra += fmt.Sprintf("  peers: %d", lastPeers)
 						}
 						if lastLatency > 0 {
-							extra += fmt.Sprintf(" | rtt: %dms", lastLatency)
+							extra += fmt.Sprintf("  rtt: %dms", lastLatency)
 						}
 						fmt.Fprintf(opts.Out, "\r\033[K  %s%s", lineWithETA, extra)
 					} else {
@@ -368,10 +368,10 @@ func Run(ctx context.Context, opts Options) error {
 						if tty {
 							extra := ""
 							if lastPeers > 0 {
-								extra += fmt.Sprintf(" | peers: %d", lastPeers)
+								extra += fmt.Sprintf("  peers: %d", lastPeers)
 							}
 							if lastLatency > 0 {
-								extra += fmt.Sprintf(" | rtt: %dms", lastLatency)
+								extra += fmt.Sprintf("  rtt: %dms", lastLatency)
 							}
 							fmt.Fprintf(opts.Out, "\r\033[K  %s%s", lineWithETA, extra)
 						} else {
@@ -413,10 +413,10 @@ func Run(ctx context.Context, opts Options) error {
 					if tty {
 						extra := ""
 						if lastPeers > 0 {
-							extra += fmt.Sprintf(" | peers: %d", lastPeers)
+							extra += fmt.Sprintf("  peers: %d", lastPeers)
 						}
 						if lastLatency > 0 {
-							extra += fmt.Sprintf(" | rtt: %dms", lastLatency)
+							extra += fmt.Sprintf("  rtt: %dms", lastLatency)
 						}
 						fmt.Fprintf(opts.Out, "\r\033[K  %s%s", lineWithETA, extra)
 					} else {
@@ -455,10 +455,10 @@ func Run(ctx context.Context, opts Options) error {
 					if tty {
 						extra := ""
 						if lastPeers > 0 {
-							extra += fmt.Sprintf(" | peers: %d", lastPeers)
+							extra += fmt.Sprintf("  peers: %d", lastPeers)
 						}
 						if lastLatency > 0 {
-							extra += fmt.Sprintf(" | rtt: %dms", lastLatency)
+							extra += fmt.Sprintf("  rtt: %dms", lastLatency)
 						}
 						fmt.Fprintf(opts.Out, "\r\033[K  %s%s\n", lineWithETA, extra)
 					} else {
@@ -685,9 +685,9 @@ func progressRateAndETA(buf []pt, cur, remote int64) (float64, string) {
 		if rem < 0 {
 			rem = 0
 		}
-		eta = fmt.Sprintf(" | ETA: %s", (time.Duration(rem * float64(time.Second))).Round(time.Second))
+		eta = fmt.Sprintf("  ETA %s", (time.Duration(rem * float64(time.Second))).Round(time.Second))
 	} else if remote > 0 {
-		eta = " | ETA: 0s"
+		eta = "  ETA 0s"
 	}
 	return rate, eta
 }
@@ -705,7 +705,7 @@ func renderProgress(percent float64, cur, remote int64) string {
 		filled = width
 	}
 	bar := strings.Repeat("█", filled) + strings.Repeat("░", width-filled)
-	return fmt.Sprintf("→ Syncing [%s] %.2f%% | %d/%d blocks", bar, percent, cur, remote)
+	return fmt.Sprintf("→ Syncing [%s] %.2f%%  %d/%d blocks", bar, percent, cur, remote)
 }
 
 func renderProgressWithQuiet(percent float64, cur, remote int64, quiet bool) string {
@@ -725,7 +725,7 @@ func renderProgressWithQuiet(percent float64, cur, remote int64, quiet bool) str
 			filled = width
 		}
 		bar := strings.Repeat("#", filled) + strings.Repeat("-", width-filled)
-		return fmt.Sprintf("[%s] %.2f%% | %d/%d", bar, percent, cur, remote)
+		return fmt.Sprintf("[%s] %.2f%%  %d/%d", bar, percent, cur, remote)
 	}
 	return renderProgress(percent, cur, remote)
 }
@@ -740,11 +740,15 @@ func isTTY() bool {
 
 func hideCursor(w io.Writer, tty bool) {
 	if tty {
+		// Disable focus reporting (prevents ^[[I/^[[O sequences)
+		fmt.Fprint(w, "\x1b[?1004l")
+		// Hide cursor
 		fmt.Fprint(w, "\x1b[?25l")
 	}
 }
 func showCursor(w io.Writer, tty bool) {
 	if tty {
+		// Show cursor (don't re-enable focus reporting as it wasn't necessarily on before)
 		fmt.Fprint(w, "\x1b[?25h")
 	}
 }

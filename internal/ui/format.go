@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"os"
 	"strings"
 )
 
@@ -70,4 +71,17 @@ func FormatSpeed(bytesPerSec float64) string {
 	default:
 		return fmt.Sprintf("%.0fB/s", bytesPerSec)
 	}
+}
+
+// ShortenPath replaces the home directory with ~ for cleaner display.
+// Example: /Users/john/.pchain/data -> ~/.pchain/data
+func ShortenPath(path string) string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return path
+	}
+	if strings.HasPrefix(path, home) {
+		return "~" + path[len(home):]
+	}
+	return path
 }

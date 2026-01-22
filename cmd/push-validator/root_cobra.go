@@ -308,7 +308,9 @@ func init() {
 				})
 				return err
 			}
-			if flagOutput != "json" {
+			// Only show success message when NOT in scripted mode (--skip-snapshot)
+			// install.sh calls with --skip-snapshot and handles its own "Node initialized" message
+			if flagOutput != "json" && !initSkipSnapshot {
 				p.Success("Initialization complete")
 			}
 			return nil
