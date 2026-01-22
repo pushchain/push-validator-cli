@@ -674,9 +674,9 @@ func Run(ctx context.Context, opts Options) error {
 // RetryOptions extends Options with retry configuration
 type RetryOptions struct {
 	Options
-	MaxRetries   int          // Max retry attempts (default: 3)
-	ResetFunc    func() error // Function to reset data before retry
-	ReconfigFunc func() error // Function to reconfigure state sync params
+	MaxRetries   int               // Max retry attempts (default: 3)
+	ResetFunc    func() error      // Function to reset data before retry
+	ReconfigFunc func(int) error   // Function to reconfigure state sync params (receives attempt number)
 }
 
 // RunWithRetry runs sync monitoring with automatic retry on failure
@@ -702,8 +702,9 @@ func RunWithRetry(ctx context.Context, opts RetryOptions) error {
 			}
 
 			// Optionally reconfigure (e.g., get fresh trust height)
+			// Pass attempt number to allow RPC rotation on each retry
 			if opts.ReconfigFunc != nil {
-				_ = opts.ReconfigFunc() // Best-effort reconfigure
+				_ = opts.ReconfigFunc(attempt) // Best-effort reconfigure
 			}
 
 			// Wait before retry (exponential backoff: 10s, 20s, 30s)

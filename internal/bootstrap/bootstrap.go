@@ -40,6 +40,7 @@ type Options struct {
 	BinPath              string       // pchaind path
 	SnapshotRPC string // e.g., https://donut.rpc.push.org
 	Progress             func(string) // optional callback for progress messages
+	Attempt              int          // Retry attempt number (0-based), used to rotate fullnode RPCs
 }
 
 type Service interface {
@@ -199,7 +200,7 @@ func (s *svc) Init(ctx context.Context, opts Options) error {
 		TrustHash:           tp.Hash,
 		RPCServers:          rpcServers,
 		TrustPeriod:         "336h0m0s",
-		ChunkFetchers:       12,      // Aggressive: 3x parallel downloads for faster sync
+		ChunkFetchers:       6,       // Balanced: 3 per peer when 2 peers share snapshot
 		ChunkRequestTimeout: "60m0s", // Extended timeout for slow/congested networks
 		DiscoveryTime:       "90s",   // More time to discover all available snapshots
 	}); err != nil {
@@ -217,6 +218,8 @@ func (s *svc) Init(ctx context.Context, opts Options) error {
 
 // ReconfigureStateSync updates state sync configuration with fresh trust parameters.
 // This is used during retry logic when the previous sync attempt failed.
+// The Attempt field in opts is used to rotate through fullnode RPCs, so each retry
+// uses a different peer's snapshot (which may be available from multiple peers).
 func (s *svc) ReconfigureStateSync(ctx context.Context, opts Options) error {
 	if opts.HomeDir == "" {
 		return errors.New("HomeDir required")
@@ -224,7 +227,10 @@ func (s *svc) ReconfigureStateSync(ctx context.Context, opts Options) error {
 
 	snapshotRPC := opts.SnapshotRPC
 	if snapshotRPC == "" {
-		snapshotRPC = fullnodeRPCs[0]
+		// Rotate through fullnode RPCs based on attempt number
+		// This ensures each retry uses a different peer's trust height/snapshot
+		rpcIndex := opts.Attempt % len(fullnodeRPCs)
+		snapshotRPC = fullnodeRPCs[rpcIndex]
 	}
 
 	// Compute fresh trust parameters
@@ -245,7 +251,7 @@ func (s *svc) ReconfigureStateSync(ctx context.Context, opts Options) error {
 		TrustHash:           tp.Hash,
 		RPCServers:          rpcServers,
 		TrustPeriod:         "336h0m0s",
-		ChunkFetchers:       12,
+		ChunkFetchers:       6,
 		ChunkRequestTimeout: "60m0s",
 		DiscoveryTime:       "90s",
 	})

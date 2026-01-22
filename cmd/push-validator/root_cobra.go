@@ -781,12 +781,14 @@ func handlePostStartFlow(cfg config.Config, p *ui.Printer) bool {
 		}
 
 		// Create reconfigure function to get fresh trust parameters
-		reconfigFunc := func() error {
+		// Takes attempt number to rotate through fullnode RPCs on each retry
+		reconfigFunc := func(attempt int) error {
 			fmt.Println(p.Colors.Info("    Refreshing state sync parameters..."))
 			svc := bootstrap.New()
 			return svc.ReconfigureStateSync(context.Background(), bootstrap.Options{
 				HomeDir:     cfg.HomeDir,
-				SnapshotRPC: "", // Use default fullnode RPC
+				SnapshotRPC: "", // Empty = rotate through fullnode RPCs based on attempt
+				Attempt:     attempt,
 			})
 		}
 
