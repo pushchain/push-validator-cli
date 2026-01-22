@@ -94,7 +94,7 @@ stop_all_processes() {
 
     # 1. Try graceful stop via manager first
     if [[ -x "$MANAGER_BIN" ]]; then
-        "$MANAGER_BIN" stop 2>/dev/null || true
+        "$MANAGER_BIN" stop >/dev/null 2>&1 || true
         sleep 2
     fi
 
@@ -420,14 +420,16 @@ download_pchaind() {
     (
         trap "rm -rf '$temp_dir'" EXIT
 
-        # Download tarball
+        # Download tarball with progress and ETA
         if command -v curl >/dev/null 2>&1; then
-            if ! curl -L --progress-bar -o "$temp_dir/$filename" "$download_url" 2>/dev/null; then
+            # Use default progress meter which shows speed and ETA
+            if ! curl -L -o "$temp_dir/$filename" "$download_url"; then
                 verbose "curl download failed"
                 exit 1
             fi
         elif command -v wget >/dev/null 2>&1; then
-            if ! wget --show-progress -O "$temp_dir/$filename" "$download_url" 2>/dev/null; then
+            # wget --show-progress shows ETA by default
+            if ! wget --show-progress -q -O "$temp_dir/$filename" "$download_url"; then
                 verbose "wget download failed"
                 exit 1
             fi
@@ -575,14 +577,16 @@ download_push_validator() {
     (
         trap "rm -rf '$temp_dir'" EXIT
 
-        # Download tarball
+        # Download tarball with progress and ETA
         if command -v curl >/dev/null 2>&1; then
-            if ! curl -L --progress-bar -o "$temp_dir/$filename" "$download_url" 2>/dev/null; then
+            # Use default progress meter which shows speed and ETA
+            if ! curl -L -o "$temp_dir/$filename" "$download_url"; then
                 verbose "curl download failed"
                 exit 1
             fi
         elif command -v wget >/dev/null 2>&1; then
-            if ! wget --show-progress -O "$temp_dir/$filename" "$download_url" 2>/dev/null; then
+            # wget --show-progress shows ETA by default
+            if ! wget --show-progress -q -O "$temp_dir/$filename" "$download_url"; then
                 verbose "wget download failed"
                 exit 1
             fi
@@ -716,10 +720,12 @@ clean_data_and_preserve_keys() {
         step "Removing old installation"
         rm -rf "$ROOT_DIR" 2>/dev/null || true
         rm -rf "$HOME_DIR/data" 2>/dev/null || true
+        # Note: snapshot-cache/ is intentionally preserved to avoid re-downloading
         rm -f "$HOME_DIR/pchaind.pid" 2>/dev/null || true
         rm -f "$MANAGER_BIN" 2>/dev/null || true
         rm -f "$INSTALL_BIN_DIR/pchaind" 2>/dev/null || true
         rm -f "$HOME_DIR/.initial_state_sync" 2>/dev/null || true
+        rm -f "$HOME_DIR/.snapshot_downloaded" 2>/dev/null || true
 
         rm -f "$HOME_DIR/config/config.toml" 2>/dev/null || true
         rm -f "$HOME_DIR/config/app.toml" 2>/dev/null || true
@@ -729,7 +735,9 @@ clean_data_and_preserve_keys() {
     else
         step "Cleaning all chain data (fixing potential corruption)"
         rm -rf "$HOME_DIR/data" 2>/dev/null || true
+        # Note: snapshot-cache/ is intentionally preserved to avoid re-downloading
         rm -f "$HOME_DIR/.initial_state_sync" 2>/dev/null || true
+        rm -f "$HOME_DIR/.snapshot_downloaded" 2>/dev/null || true
         mkdir -p "$HOME_DIR/data"
         echo '{"height":"0","round":0,"step":0}' > "$HOME_DIR/data/priv_validator_state.json"
     fi
@@ -1081,7 +1089,7 @@ GO_VER=$(go version | awk '{print $3}' | sed 's/go//')
 TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
 
 # Calculate total phases needed (detection already done above before mkdir)
-TOTAL_PHASES=4  # Base: Install Manager, Build Chain, Init, Start
+TOTAL_PHASES=5  # Base: Install Manager, Build Chain, Download Snapshot, Init, Start
 if [[ "$HAS_RUNNING_NODE" = "yes" ]]; then
   ((TOTAL_PHASES++))  # Add stopping phase
 fi
@@ -1219,8 +1227,13 @@ fi
 
 next_phase "Installing Chain Binary"
 
-# Download pre-built binary from GitHub releases
-if ! download_pchaind; then
+# Download pre-built binary using push-validator CLI (with progress bar)
+VERSION_FLAG=""
+if [[ "$PCHAIN_REF" =~ ^v[0-9] ]]; then
+  VERSION_FLAG="--version $PCHAIN_REF"
+fi
+
+if ! "$MANAGER_BIN" chain install $VERSION_FLAG --home "$HOME_DIR"; then
   err "Failed to download pchaind binary"
   echo
   echo "Please check your internet connection and try again."
@@ -1243,6 +1256,17 @@ else
 fi
 
 if [[ "$AUTO_START" = "yes" ]]; then
+  # Download snapshot to cache (separate phase for better progress tracking)
+  next_phase "Downloading Snapshot"
+  SNAPSHOT_MARKER="$HOME_DIR/.snapshot_downloaded"
+  DATA_DIR="$HOME_DIR/data"
+
+  step "Downloading blockchain snapshot (~6-7GB)"
+  "$MANAGER_BIN" snapshot download \
+    --home "$HOME_DIR" \
+    --snapshot-url "$SNAPSHOT_URL" || { err "snapshot download failed"; exit 1; }
+  ok "Snapshot cached"
+
   next_phase "Initializing Node"
   # Initialize if: forced by reset, or config/genesis missing
   if [[ "${NEED_INIT:-no}" = "yes" ]] || [[ ! -f "$HOME_DIR/config/config.toml" ]] || [[ ! -f "$HOME_DIR/config/genesis.json" ]]; then
@@ -1253,7 +1277,8 @@ if [[ "$AUTO_START" = "yes" ]]; then
       --chain-id "$CHAIN_ID" \
       --genesis-domain "$GENESIS_DOMAIN" \
       --snapshot-url "$SNAPSHOT_URL" \
-      --bin "${PCHAIND:-pchaind}" || { err "init failed"; exit 1; }
+      --skip-snapshot \
+      --bin "${PCHAIND:-pchaind}" 2>&1 | indent_output || { err "init failed"; exit 1; }
     ok "Node initialized"
 
     # Optimize config for faster sync
@@ -1288,6 +1313,17 @@ if [[ "$AUTO_START" = "yes" ]]; then
   else
     step "Configuration exists, skipping init"
   fi
+
+  # Extract snapshot from cache to data directory (after init, to avoid being wiped by --overwrite)
+  step "Extracting snapshot to data directory"
+  "$MANAGER_BIN" snapshot extract \
+    --home "$HOME_DIR" \
+    --target "$DATA_DIR" \
+    --force || { err "snapshot extract failed"; exit 1; }
+
+  # Mark snapshot as downloaded
+  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$SNAPSHOT_MARKER"
+  ok "Snapshot extracted to data directory"
 
   next_phase "Starting and Syncing Node"
   MAX_RETRIES=5

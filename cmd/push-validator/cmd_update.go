@@ -121,18 +121,16 @@ Examples:
 				return err
 			}
 
-			// Download with progress
+			// Download with progress bar
 			p.Info(fmt.Sprintf("Downloading %s...", asset.Name))
+			bar := ui.NewProgressBar(os.Stdout, asset.Size)
 			archiveData, err := updater.Download(asset, func(downloaded, total int64) {
-				if total > 0 {
-					pct := float64(downloaded) / float64(total) * 100
-					fmt.Printf("\r  Downloading... %.1f%%", pct)
-				}
+				bar.Update(downloaded)
 			})
+			bar.Finish()
 			if err != nil {
 				return fmt.Errorf("download failed: %w", err)
 			}
-			fmt.Println() // Clear progress line
 
 			// Verify checksum
 			if !skipVerify {

@@ -241,7 +241,7 @@ func Run(ctx context.Context, opts Options) error {
 				if lastLatency > 0 {
 					extra += fmt.Sprintf(" | rtt: %dms", lastLatency)
 				}
-				fmt.Fprintf(opts.Out, "\r\033[K%s%s", lineWithETA, extra)
+				fmt.Fprintf(opts.Out, "\r\033[K  %s%s", lineWithETA, extra)
 			} else {
 				if opts.Quiet {
 					fmt.Fprintf(opts.Out, "height=%d/%d rate=%.2f%s peers=%d rtt=%dms\n", cur, lastRemote, rate, eta, lastPeers, lastLatency)
@@ -460,7 +460,7 @@ func Run(ctx context.Context, opts Options) error {
 						if lastLatency > 0 {
 							extra += fmt.Sprintf(" | rtt: %dms", lastLatency)
 						}
-						fmt.Fprintf(opts.Out, "\r\033[K%s%s\n", lineWithETA, extra)
+						fmt.Fprintf(opts.Out, "\r\033[K  %s%s\n", lineWithETA, extra)
 					} else {
 						if opts.Quiet {
 							fmt.Fprintf(opts.Out, "height=%d/%d rate=%.2f%s peers=%d rtt=%dms\n", cur, remoteH, rate, eta, lastPeers, lastLatency)
@@ -705,7 +705,7 @@ func renderProgress(percent float64, cur, remote int64) string {
 		filled = width
 	}
 	bar := strings.Repeat("█", filled) + strings.Repeat("░", width-filled)
-	return fmt.Sprintf("Syncing [%s] %.2f%% | %d/%d blocks", bar, percent, cur, remote)
+	return fmt.Sprintf("→ Syncing [%s] %.2f%% | %d/%d blocks", bar, percent, cur, remote)
 }
 
 func renderProgressWithQuiet(percent float64, cur, remote int64, quiet bool) string {

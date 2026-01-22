@@ -26,15 +26,16 @@ var fullnodePeers = []string{
 
 // Options configures the bootstrap process.
 type Options struct {
-	HomeDir       string                  // Node home directory (e.g., ~/.pchain)
-	ChainID       string                  // Chain ID (e.g., push_42101-1)
-	Moniker       string                  // Node moniker
-	Denom         string                  // Staking denom (e.g., upc)
-	GenesisDomain string                  // Genesis RPC domain (e.g., donut.rpc.push.org)
-	BinPath       string                  // Path to pchaind binary
-	SnapshotURL   string                  // Base URL for snapshot downloads
-	Progress      func(string)            // Progress message callback
-	SnapshotProgress snapshot.ProgressFunc // Detailed snapshot progress callback
+	HomeDir          string                  // Node home directory (e.g., ~/.pchain)
+	ChainID          string                  // Chain ID (e.g., push_42101-1)
+	Moniker          string                  // Node moniker
+	Denom            string                  // Staking denom (e.g., upc)
+	GenesisDomain    string                  // Genesis RPC domain (e.g., donut.rpc.push.org)
+	BinPath          string                  // Path to pchaind binary
+	SnapshotURL      string                  // Base URL for snapshot downloads
+	Progress         func(string)            // Progress message callback
+	SnapshotProgress snapshot.ProgressFunc   // Detailed snapshot progress callback
+	SkipSnapshot     bool                    // Skip snapshot download (for separate step)
 }
 
 // Service bootstraps a new node with snapshot download.
@@ -181,20 +182,26 @@ func (s *svc) Init(ctx context.Context, opts Options) error {
 		}
 	}
 
-	// Step 8: Download and extract snapshot
-	progress("Downloading blockchain snapshot...")
-	if err := s.snapshot.Download(ctx, snapshot.Options{
-		SnapshotURL: opts.SnapshotURL,
-		HomeDir:     opts.HomeDir,
-		Progress:    opts.SnapshotProgress,
-	}); err != nil {
-		return fmt.Errorf("download snapshot: %w", err)
+	// Step 8: Download and extract snapshot (unless skipped or already present)
+	if opts.SkipSnapshot {
+		progress("Skipping snapshot download (handled separately)")
+	} else if snapshot.IsSnapshotPresent(opts.HomeDir) {
+		progress("Snapshot already exists, skipping download")
+	} else {
+		progress("Downloading blockchain snapshot...")
+		if err := s.snapshot.Download(ctx, snapshot.Options{
+			SnapshotURL: opts.SnapshotURL,
+			HomeDir:     opts.HomeDir,
+			Progress:    opts.SnapshotProgress,
+		}); err != nil {
+			return fmt.Errorf("download snapshot: %w", err)
+		}
+
+		// Mark successful snapshot download
+		_ = os.WriteFile(filepath.Join(opts.HomeDir, ".snapshot_downloaded"), []byte(time.Now().Format(time.RFC3339)), 0o644)
+
+		progress("Snapshot downloaded and extracted successfully")
 	}
-
-	// Mark successful snapshot download
-	_ = os.WriteFile(filepath.Join(opts.HomeDir, ".snapshot_downloaded"), []byte(time.Now().Format(time.RFC3339)), 0o644)
-
-	progress("Snapshot downloaded and extracted successfully")
 	return nil
 }
 

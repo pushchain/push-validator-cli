@@ -31,3 +31,43 @@ func reverse(s string) string {
 	}
 	return string(runes)
 }
+
+// FormatBytes formats a byte count as a human-readable string.
+// Example: 1234567890 -> "1.1GB"
+func FormatBytes(bytes int64) string {
+	const (
+		KB = 1024
+		MB = KB * 1024
+		GB = MB * 1024
+	)
+	switch {
+	case bytes >= GB:
+		return fmt.Sprintf("%.1fGB", float64(bytes)/float64(GB))
+	case bytes >= MB:
+		return fmt.Sprintf("%.1fMB", float64(bytes)/float64(MB))
+	case bytes >= KB:
+		return fmt.Sprintf("%.1fKB", float64(bytes)/float64(KB))
+	default:
+		return fmt.Sprintf("%dB", bytes)
+	}
+}
+
+// FormatSpeed formats a bytes-per-second rate as a human-readable string.
+// Example: 2097152.0 -> "2.0MB/s"
+func FormatSpeed(bytesPerSec float64) string {
+	const (
+		KB = 1024.0
+		MB = KB * 1024
+		GB = MB * 1024
+	)
+	switch {
+	case bytesPerSec >= GB:
+		return fmt.Sprintf("%.1fGB/s", bytesPerSec/GB)
+	case bytesPerSec >= MB:
+		return fmt.Sprintf("%.1fMB/s", bytesPerSec/MB)
+	case bytesPerSec >= KB:
+		return fmt.Sprintf("%.1fKB/s", bytesPerSec/KB)
+	default:
+		return fmt.Sprintf("%.0fB/s", bytesPerSec)
+	}
+}

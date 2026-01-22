@@ -22,6 +22,7 @@ import (
 	"github.com/pushchain/push-validator-cli/internal/exitcodes"
 	"github.com/pushchain/push-validator-cli/internal/metrics"
 	"github.com/pushchain/push-validator-cli/internal/process"
+	"github.com/pushchain/push-validator-cli/internal/snapshot"
 	syncmon "github.com/pushchain/push-validator-cli/internal/sync"
 	ui "github.com/pushchain/push-validator-cli/internal/ui"
 	"github.com/pushchain/push-validator-cli/internal/update"
@@ -41,6 +42,29 @@ var (
 // updateCheckResult stores the result of background update check
 var updateCheckResult *update.CheckResult
 
+// shouldSkipUpdateCheck returns true for commands where update notifications are disruptive
+func shouldSkipUpdateCheck(cmd *cobra.Command) bool {
+	cmdName := cmd.Name()
+	// Skip for update, help, version commands
+	if cmdName == "update" || cmdName == "help" || cmdName == "version" {
+		return true
+	}
+	// Skip for installation-related commands (called by install.sh)
+	if cmdName == "init" || cmdName == "snapshot" || cmdName == "chain" ||
+		cmdName == "start" || cmdName == "sync" {
+		return true
+	}
+	// Skip for subcommands of chain (e.g., "chain install")
+	if cmd.Parent() != nil && cmd.Parent().Name() == "chain" {
+		return true
+	}
+	// Skip for subcommands of snapshot (e.g., "snapshot download")
+	if cmd.Parent() != nil && cmd.Parent().Name() == "snapshot" {
+		return true
+	}
+	return false
+}
+
 var rootCmd = &cobra.Command{
 	Use:   "push-validator",
 	Short: "Push Validator",
@@ -58,16 +82,15 @@ var rootCmd = &cobra.Command{
 		})
 
 		// Start background update check (non-blocking)
-		// Skip for update command itself and help/version commands
-		cmdName := cmd.Name()
-		if cmdName != "update" && cmdName != "help" && cmdName != "version" {
+		// Skip for installation-related commands where notifications are disruptive
+		if !shouldSkipUpdateCheck(cmd) {
 			go checkForUpdateBackground()
 		}
 	},
 	PersistentPostRun: func(cmd *cobra.Command, args []string) {
 		// Show update notification if available (after command completes)
-		// Skip for update command itself
-		if cmd.Name() != "update" && updateCheckResult != nil && updateCheckResult.UpdateAvailable {
+		// Skip for installation-related commands where notifications are disruptive
+		if !shouldSkipUpdateCheck(cmd) && updateCheckResult != nil && updateCheckResult.UpdateAvailable {
 			showUpdateNotification(updateCheckResult.LatestVersion)
 		}
 	},
@@ -232,6 +255,7 @@ func init() {
 
 	// init (Cobra flags)
 	var initMoniker, initChainID, initSnapshotURL string
+	var initSkipSnapshot bool
 	initCmd := &cobra.Command{
 		Use:    "init",
 		Short:  "Initialize local node home",
@@ -258,13 +282,15 @@ func init() {
 
 			svc := bootstrap.New()
 			if err := svc.Init(cmd.Context(), bootstrap.Options{
-				HomeDir:       cfg.HomeDir,
-				ChainID:       initChainID,
-				Moniker:       initMoniker,
-				GenesisDomain: cfg.GenesisDomain,
-				BinPath:       findPchaind(),
-				SnapshotURL:   initSnapshotURL,
-				Progress:      progressCallback,
+				HomeDir:          cfg.HomeDir,
+				ChainID:          initChainID,
+				Moniker:          initMoniker,
+				GenesisDomain:    cfg.GenesisDomain,
+				BinPath:          findPchaind(),
+				SnapshotURL:      initSnapshotURL,
+				Progress:         progressCallback,
+				SnapshotProgress: createSnapshotProgressCallback(flagOutput),
+				SkipSnapshot:     initSkipSnapshot,
 			}); err != nil {
 				ui.PrintError(ui.ErrorMessage{
 					Problem: "Initialization failed",
@@ -283,7 +309,7 @@ func init() {
 				return err
 			}
 			if flagOutput != "json" {
-				p.Success("✓ Initialization complete")
+				p.Success("Initialization complete")
 			}
 			return nil
 		},
@@ -291,6 +317,7 @@ func init() {
 	initCmd.Flags().StringVar(&initMoniker, "moniker", "", "Validator moniker")
 	initCmd.Flags().StringVar(&initChainID, "chain-id", "", "Chain ID")
 	initCmd.Flags().StringVar(&initSnapshotURL, "snapshot-url", "", "Snapshot download base URL")
+	initCmd.Flags().BoolVar(&initSkipSnapshot, "skip-snapshot", false, "Skip snapshot download (for separate step)")
 	rootCmd.AddCommand(initCmd)
 
 	// start (Cobra flags)
@@ -338,13 +365,14 @@ func init() {
 
 				svc := bootstrap.New()
 				if err := svc.Init(cmd.Context(), bootstrap.Options{
-					HomeDir:       cfg.HomeDir,
-					ChainID:       cfg.ChainID,
-					Moniker:       getenvDefault("MONIKER", "push-validator"),
-					GenesisDomain: cfg.GenesisDomain,
-					BinPath:       findPchaind(),
-					SnapshotURL:   cfg.SnapshotURL,
-					Progress:      progressCallback,
+					HomeDir:          cfg.HomeDir,
+					ChainID:          cfg.ChainID,
+					Moniker:          getenvDefault("MONIKER", "push-validator"),
+					GenesisDomain:    cfg.GenesisDomain,
+					BinPath:          findPchaind(),
+					SnapshotURL:      cfg.SnapshotURL,
+					Progress:         progressCallback,
+					SnapshotProgress: createSnapshotProgressCallback(flagOutput),
 				}); err != nil {
 					ui.PrintError(ui.ErrorMessage{
 						Problem: "Initialization failed",
@@ -364,7 +392,7 @@ func init() {
 
 				if flagOutput != "json" {
 					fmt.Println()
-					p.Success("✓ Initialization complete")
+					p.Success("Initialization complete")
 				}
 			}
 
@@ -393,15 +421,15 @@ func init() {
 			if flagOutput != "json" {
 				if isAlreadyRunning {
 					if pid, ok := sup.PID(); ok {
-						p.Success(fmt.Sprintf("✓ Node is running (PID: %d)", pid))
+						p.Success(fmt.Sprintf("Node is running (PID: %d)", pid))
 					} else {
-						p.Success("✓ Node is running")
+						p.Success("Node is running")
 					}
 				} else {
 					if useCosmovisor {
-						p.Info("Starting node with Cosmovisor...")
+						fmt.Println("→ Starting node with Cosmovisor...")
 					} else {
-						p.Info("Starting node...")
+						fmt.Println("→ Starting node...")
 					}
 				}
 			}
@@ -432,9 +460,9 @@ func init() {
 			} else {
 				if !isAlreadyRunning {
 					if useCosmovisor {
-						p.Success("✓ Node started with Cosmovisor")
+						p.Success("Node started with Cosmovisor")
 					} else {
-						p.Success("✓ Node started successfully")
+						p.Success("Node started successfully")
 					}
 				}
 
@@ -701,6 +729,42 @@ func loadCfg() config.Config {
 		os.Setenv("PCHAIND", flagBin)
 	}
 	return cfg
+}
+
+// createSnapshotProgressCallback creates a progress callback for snapshot downloads
+// that displays a visual progress bar during download.
+func createSnapshotProgressCallback(output string) snapshot.ProgressFunc {
+	var bar *ui.ProgressBar
+	return func(phase snapshot.ProgressPhase, current, total int64, message string) {
+		if output == "json" {
+			return
+		}
+		switch phase {
+		case snapshot.PhaseDownload:
+			if bar == nil && total > 0 {
+				bar = ui.NewProgressBar(os.Stdout, total)
+			}
+			if bar != nil {
+				bar.Update(current)
+			}
+		case snapshot.PhaseVerify:
+			if bar != nil {
+				bar.Finish()
+				bar = nil
+			}
+			if message != "" {
+				fmt.Printf("  → %s\n", message)
+			}
+		case snapshot.PhaseExtract:
+			if message != "" {
+				// Truncate long filenames to fit on one line
+				if len(message) > 60 {
+					message = message[:57] + "..."
+				}
+				fmt.Printf("\r  → Extracting: %-60s", message)
+			}
+		}
+	}
 }
 
 // handlePostStartFlow manages the post-start flow based on validator status.
