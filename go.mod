@@ -9,8 +9,10 @@ require (
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/gorilla/websocket v1.5.1
 	github.com/nxadm/tail v1.4.11
+	github.com/pierrec/lz4/v4 v4.1.25
 	github.com/shirou/gopsutil/v3 v3.24.5
 	github.com/spf13/cobra v1.8.0
+	golang.org/x/mod v0.32.0
 	golang.org/x/term v0.13.0
 	gopkg.in/yaml.v3 v3.0.1
 )
@@ -41,7 +43,6 @@ require (
 	github.com/tklauser/numcpus v0.6.1 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
-	golang.org/x/mod v0.32.0 // indirect
 	golang.org/x/net v0.17.0 // indirect
 	golang.org/x/sync v0.11.0 // indirect
 	golang.org/x/sys v0.30.0 // indirect

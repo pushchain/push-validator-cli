@@ -231,7 +231,7 @@ func init() {
 	rootCmd.AddCommand(createDashboardCmd())
 
 	// init (Cobra flags)
-	var initMoniker, initChainID, initSnapshotRPC string
+	var initMoniker, initChainID, initSnapshotURL string
 	initCmd := &cobra.Command{
 		Use:    "init",
 		Short:  "Initialize local node home",
@@ -245,8 +245,8 @@ func init() {
 			if initChainID == "" {
 				initChainID = cfg.ChainID
 			}
-			if initSnapshotRPC == "" {
-				initSnapshotRPC = cfg.SnapshotRPC
+			if initSnapshotURL == "" {
+				initSnapshotURL = cfg.SnapshotURL
 			}
 
 			// Create progress callback that shows init steps
@@ -258,13 +258,13 @@ func init() {
 
 			svc := bootstrap.New()
 			if err := svc.Init(cmd.Context(), bootstrap.Options{
-				HomeDir:              cfg.HomeDir,
-				ChainID:              initChainID,
-				Moniker:              initMoniker,
-				GenesisDomain:        cfg.GenesisDomain,
-				BinPath:              findPchaind(),
-				SnapshotRPC: initSnapshotRPC,
-				Progress:             progressCallback,
+				HomeDir:       cfg.HomeDir,
+				ChainID:       initChainID,
+				Moniker:       initMoniker,
+				GenesisDomain: cfg.GenesisDomain,
+				BinPath:       findPchaind(),
+				SnapshotURL:   initSnapshotURL,
+				Progress:      progressCallback,
 			}); err != nil {
 				ui.PrintError(ui.ErrorMessage{
 					Problem: "Initialization failed",
@@ -290,7 +290,7 @@ func init() {
 	}
 	initCmd.Flags().StringVar(&initMoniker, "moniker", "", "Validator moniker")
 	initCmd.Flags().StringVar(&initChainID, "chain-id", "", "Chain ID")
-	initCmd.Flags().StringVar(&initSnapshotRPC, "snapshot-rpc", "", "Snapshot RPC base URL")
+	initCmd.Flags().StringVar(&initSnapshotURL, "snapshot-url", "", "Snapshot download base URL")
 	rootCmd.AddCommand(initCmd)
 
 	// start (Cobra flags)
@@ -338,13 +338,13 @@ func init() {
 
 				svc := bootstrap.New()
 				if err := svc.Init(cmd.Context(), bootstrap.Options{
-					HomeDir:              cfg.HomeDir,
-					ChainID:              cfg.ChainID,
-					Moniker:              getenvDefault("MONIKER", "push-validator"),
-					GenesisDomain:        cfg.GenesisDomain,
-					BinPath:              findPchaind(),
-					SnapshotRPC: cfg.SnapshotRPC,
-					Progress:             progressCallback,
+					HomeDir:       cfg.HomeDir,
+					ChainID:       cfg.ChainID,
+					Moniker:       getenvDefault("MONIKER", "push-validator"),
+					GenesisDomain: cfg.GenesisDomain,
+					BinPath:       findPchaind(),
+					SnapshotURL:   cfg.SnapshotURL,
+					Progress:      progressCallback,
 				}); err != nil {
 					ui.PrintError(ui.ErrorMessage{
 						Problem: "Initialization failed",
@@ -780,17 +780,8 @@ func handlePostStartFlow(cfg config.Config, p *ui.Printer) bool {
 			return nil
 		}
 
-		// Create reconfigure function to get fresh trust parameters
-		// Takes attempt number to rotate through fullnode RPCs on each retry
-		reconfigFunc := func(attempt int) error {
-			fmt.Println(p.Colors.Info("    Refreshing state sync parameters..."))
-			svc := bootstrap.New()
-			return svc.ReconfigureStateSync(context.Background(), bootstrap.Options{
-				HomeDir:     cfg.HomeDir,
-				SnapshotRPC: "", // Empty = rotate through fullnode RPCs based on attempt
-				Attempt:     attempt,
-			})
-		}
+		// Note: With snapshot download, we don't need state sync reconfigure.
+		// The node already has data from the snapshot and just needs to catch up via block sync.
 
 		if err := syncmon.RunWithRetry(context.Background(), syncmon.RetryOptions{
 			Options: syncmon.Options{
@@ -805,9 +796,8 @@ func handlePostStartFlow(cfg config.Config, p *ui.Printer) bool {
 				Debug:        flagDebug,
 				StuckTimeout: 30 * time.Minute, // Detect stuck sync
 			},
-			MaxRetries:   3,
-			ResetFunc:    resetFunc,
-			ReconfigFunc: reconfigFunc,
+			MaxRetries: 3,
+			ResetFunc:  resetFunc,
 		}); err != nil {
 			// Sync failed after retries - show warning and dashboard
 			fmt.Println()

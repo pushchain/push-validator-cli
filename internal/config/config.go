@@ -12,7 +12,7 @@ type Config struct {
 	HomeDir        string
 	GenesisDomain  string
 	KeyringBackend string
-	SnapshotRPC    string
+	SnapshotURL    string // Base URL for snapshot downloads
 	RPCLocal       string // e.g., http://127.0.0.1:26657
 	Denom          string // staking denom (e.g., upc)
 }
@@ -25,7 +25,7 @@ func Defaults() Config {
 		HomeDir:        filepath.Join(home, ".pchain"),
 		GenesisDomain:  "donut.rpc.push.org",
 		KeyringBackend: "test",
-		SnapshotRPC:    "http://136.112.142.137:26657", // fullnode-1 (has snapshots)
+		SnapshotURL:    "https://snapshots.donut.push.org", // Snapshot download server
 		RPCLocal:       "http://127.0.0.1:26657",
 		Denom:          "upc",
 	}

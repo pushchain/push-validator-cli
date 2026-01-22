@@ -1,7 +1,6 @@
 package syncmon
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -22,7 +21,7 @@ import (
 type Options struct {
 	LocalRPC     string
 	RemoteRPC    string
-	LogPath      string
+	LogPath      string        // Kept for compatibility but no longer used for state sync
 	Window       int
 	Compact      bool
 	Out          io.Writer     // default os.Stdout
@@ -40,17 +39,13 @@ type pt struct {
 const defaultStuckTimeout = 30 * time.Minute
 
 var ErrSyncStuck = errors.New("sync stuck: no progress detected")
-var ErrSnapshotRejected = errors.New("state sync failed: snapshot rejected")
-var ErrSnapshotConflict = errors.New("state sync failed: restore conflict")
 
 // RetryableError returns true if the error type allows automatic retry
 func RetryableError(err error) bool {
-	return errors.Is(err, ErrSnapshotRejected) ||
-		errors.Is(err, ErrSnapshotConflict) ||
-		errors.Is(err, ErrSyncStuck)
+	return errors.Is(err, ErrSyncStuck)
 }
 
-// Run performs two-phase monitoring: snapshot spinner from logs, then WS header progress.
+// Run monitors block sync progress via WebSocket header subscription.
 func Run(ctx context.Context, opts Options) error {
 	if opts.Out == nil {
 		opts.Out = os.Stdout
@@ -70,198 +65,7 @@ func Run(ctx context.Context, opts Options) error {
 	hideCursor(opts.Out, tty)
 	defer showCursor(opts.Out, tty)
 
-	// Start log tailer if log path provided
-	snapCh := make(chan string, 16)
-	stopLog := make(chan struct{})
-	if opts.LogPath != "" {
-		go tailStatesync(ctx, opts.LogPath, snapCh, stopLog)
-	} else {
-		close(snapCh)
-	}
-
-	// Phase 1: snapshot progress indicator until acceptance/quiet
-	phase1Done := make(chan struct{})
-	var phase1Err error
-	var sawSnapshot bool
-	var sawAccepted bool
-	go func() {
-		defer close(phase1Done)
-		phase1Start := time.Now()
-		lastEvent := time.Now()
-		sawSnapshot = false
-		ticker := time.NewTicker(80 * time.Millisecond)
-		defer ticker.Stop()
-
-		steps := []string{
-			"Discovering snapshots",
-			"Downloading snapshot",
-			"Restoring database",
-			"Verifying and completing",
-		}
-		currentStep := 1
-		maxStep := len(steps)
-		printed := make([]bool, maxStep)
-		completed := make([]bool, maxStep)
-
-		spinnerFrames := []rune{'⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'}
-		spinnerIndex := 0
-
-		printStep := func(idx int, done bool) {
-			if idx < 0 || idx >= maxStep {
-				return
-			}
-			if done {
-				if completed[idx] {
-					return
-				}
-				completed[idx] = true
-			} else if printed[idx] && !completed[idx] {
-				return
-			}
-			elapsed := time.Duration(0)
-			if !done {
-				elapsed = time.Since(phase1Start)
-			}
-			line := renderStepIndicator(idx+1, maxStep, steps[idx], opts.Quiet, done, elapsed)
-			if done || !tty {
-				if done && tty {
-					// Clear spinner line before printing completed step
-					fmt.Fprintf(opts.Out, "\r\033[K%s\n", line)
-				} else {
-					fmt.Fprintln(opts.Out, line)
-				}
-				printed[idx] = true
-			} else {
-				fmt.Fprintf(opts.Out, "\r\033[K%s %c", line, spinnerFrames[spinnerIndex])
-				printed[idx] = true
-			}
-		}
-
-		printStep(currentStep-1, false)
-
-		for {
-			select {
-			case <-ctx.Done():
-				phase1Err = ctx.Err()
-				return
-			case line, ok := <-snapCh:
-				if !ok {
-					return
-				}
-				low := strings.ToLower(line)
-				// Detect specific failure modes for retry logic
-				// NOTE: Do NOT trigger on individual chunk timeouts - CometBFT handles those internally
-				// Only trigger on "rejected snapshot" which is the fatal error when CometBFT gives up
-				if strings.Contains(low, "rejected snapshot") {
-					phase1Err = ErrSnapshotRejected
-					return
-				}
-				if strings.Contains(low, "restore operation is in progress") ||
-					strings.Contains(low, "conflict") && strings.Contains(low, "restore") {
-					phase1Err = ErrSnapshotConflict
-					return
-				}
-				// Keep existing generic failure detection
-				if strings.Contains(low, "state sync failed") || strings.Contains(low, "state sync aborted") {
-					phase1Err = fmt.Errorf("state sync failed: %s", strings.TrimSpace(line))
-					return
-				}
-				switch {
-				case strings.Contains(low, "discovering snapshots"):
-					currentStep = 1
-				case strings.Contains(low, "fetching snapshot chunk"):
-					currentStep = 2
-				case strings.Contains(low, "applied snapshot chunk") || strings.Contains(low, "restoring"):
-					currentStep = 3
-				case strings.Contains(low, "snapshot accepted") ||
-					strings.Contains(low, "snapshot restored") ||
-					strings.Contains(low, "restored snapshot") ||
-					strings.Contains(low, "switching to blocksync") ||
-					strings.Contains(low, "switching to block sync"):
-					currentStep = 4
-					sawAccepted = true
-				}
-				if strings.Contains(low, "statesync") || strings.Contains(low, "state sync") || strings.Contains(low, "snapshot") {
-					lastEvent = time.Now()
-					lastProgress.Update()
-					sawSnapshot = true
-				}
-				if currentStep < 1 {
-					currentStep = 1
-				}
-				if currentStep > maxStep {
-					currentStep = maxStep
-				}
-				for i := 0; i < currentStep-1; i++ {
-					printStep(i, true)
-				}
-				printStep(currentStep-1, sawAccepted && currentStep == maxStep)
-			case <-ticker.C:
-				if opts.StuckTimeout > 0 && lastProgress.Since() > opts.StuckTimeout {
-					// Before declaring stuck, check if node RPC is still alive
-					// During restore phase, node may be busy but still responsive
-					if !isNodeAlive(opts.LocalRPC) {
-						phase1Err = ErrSyncStuck
-						return
-					}
-					// Node is alive, reset progress timer and continue waiting
-					lastProgress.Update()
-				}
-				if !completed[currentStep-1] {
-					spinnerIndex = (spinnerIndex + 1) % len(spinnerFrames)
-					line := renderStepIndicator(currentStep, maxStep, steps[currentStep-1], opts.Quiet, false, time.Since(phase1Start))
-					if tty {
-						fmt.Fprintf(opts.Out, "\r\033[K%s %c", line, spinnerFrames[spinnerIndex])
-					}
-				}
-				// Smart completion: if Step 3 stuck with no new logs for 2s, check RPC
-				if currentStep == 3 && sawSnapshot && time.Since(lastEvent) > 2*time.Second {
-					if isSyncedQuick(opts.LocalRPC) {
-						currentStep = maxStep
-						sawAccepted = true
-						for i := 0; i < maxStep; i++ {
-							printStep(i, true)
-						}
-						return
-					}
-				}
-				if sawAccepted && time.Since(lastEvent) > 5*time.Second {
-					for i := 0; i < maxStep; i++ {
-						printStep(i, true)
-					}
-					return
-				}
-				if !sawSnapshot {
-					if isSyncedQuick(opts.LocalRPC) {
-						for i := 0; i < maxStep; i++ {
-							printStep(i, true)
-						}
-						return
-					}
-				} else if isSyncedQuick(opts.LocalRPC) {
-					currentStep = maxStep
-					for i := 0; i < maxStep; i++ {
-						printStep(i, true)
-					}
-					return
-				}
-			}
-		}
-	}()
-
-	// Wait for phase 1 to complete or error
-	<-phase1Done
-	close(stopLog)
-	if phase1Err != nil {
-		return phase1Err
-	}
-	if sawAccepted {
-		fmt.Fprintln(opts.Out, "")
-		fmt.Fprintln(opts.Out, "  \033[92m✓\033[0m Snapshot restored. Switching to block sync...")
-	}
-	lastProgress.Update()
-
-	// Phase 2: WS header subscription + progress bar
+	// Block sync monitoring via WebSocket
 	local := strings.TrimRight(opts.LocalRPC, "/")
 	if local == "" {
 		local = "http://127.0.0.1:26657"
@@ -674,9 +478,8 @@ func Run(ctx context.Context, opts Options) error {
 // RetryOptions extends Options with retry configuration
 type RetryOptions struct {
 	Options
-	MaxRetries   int               // Max retry attempts (default: 3)
-	ResetFunc    func() error      // Function to reset data before retry
-	ReconfigFunc func(int) error   // Function to reconfigure state sync params (receives attempt number)
+	MaxRetries int          // Max retry attempts (default: 3)
+	ResetFunc  func() error // Function to reset data before retry
 }
 
 // RunWithRetry runs sync monitoring with automatic retry on failure
@@ -692,19 +495,13 @@ func RunWithRetry(ctx context.Context, opts RetryOptions) error {
 	for attempt := 0; attempt <= opts.MaxRetries; attempt++ {
 		if attempt > 0 {
 			// Log retry attempt
-			fmt.Fprintf(opts.Out, "\n  ⟳ State sync retry %d/%d...\n", attempt, opts.MaxRetries)
+			fmt.Fprintf(opts.Out, "\n  Sync retry %d/%d...\n", attempt, opts.MaxRetries)
 
 			// Reset data before retry (clear conflicting state)
 			if opts.ResetFunc != nil {
 				if err := opts.ResetFunc(); err != nil {
 					return fmt.Errorf("failed to reset for retry: %w", err)
 				}
-			}
-
-			// Optionally reconfigure (e.g., get fresh trust height)
-			// Pass attempt number to allow RPC rotation on each retry
-			if opts.ReconfigFunc != nil {
-				_ = opts.ReconfigFunc(attempt) // Best-effort reconfigure
 			}
 
 			// Wait before retry (exponential backoff: 10s, 20s, 30s)
@@ -726,16 +523,12 @@ func RunWithRetry(ctx context.Context, opts RetryOptions) error {
 		}
 
 		// Log the failure type
-		if errors.Is(err, ErrSnapshotRejected) {
-			fmt.Fprintf(opts.Out, "\n  ✗ Snapshot was rejected\n")
-		} else if errors.Is(err, ErrSnapshotConflict) {
-			fmt.Fprintf(opts.Out, "\n  ✗ Restore conflict detected\n")
-		} else if errors.Is(err, ErrSyncStuck) {
-			fmt.Fprintf(opts.Out, "\n  ✗ Sync appears stuck\n")
+		if errors.Is(err, ErrSyncStuck) {
+			fmt.Fprintf(opts.Out, "\n  Sync appears stuck\n")
 		}
 	}
 
-	return fmt.Errorf("state sync failed after %d retries: %w", opts.MaxRetries, lastErr)
+	return fmt.Errorf("sync failed after %d retries: %w", opts.MaxRetries, lastErr)
 }
 
 // --- helpers ---
@@ -764,99 +557,6 @@ func (a *atomicTime) Since() time.Duration {
 		return 0
 	}
 	return time.Since(time.Unix(0, last))
-}
-
-func formatDuration(d time.Duration) string {
-	m := int(d.Minutes())
-	s := int(d.Seconds()) % 60
-	if m > 0 {
-		return fmt.Sprintf("%dm%02ds", m, s)
-	}
-	return fmt.Sprintf("%ds", s)
-}
-
-func renderStepIndicator(step, total int, message string, quiet bool, completed bool, elapsed time.Duration) string {
-	filled := "●"
-	empty := "○"
-	if quiet {
-		filled = "#"
-		empty = "-"
-	}
-	if total <= 0 {
-		total = 1
-	}
-	if step < 1 {
-		step = 1
-	}
-	if step > total {
-		step = total
-	}
-	var sb strings.Builder
-	sb.Grow(total)
-	for i := 1; i <= total; i++ {
-		if i <= step {
-			sb.WriteString(filled)
-		} else {
-			sb.WriteString(empty)
-		}
-	}
-	suffix := message
-	if completed && !quiet {
-		suffix = fmt.Sprintf("%s \033[92m%s\033[0m", message, "✓")
-	}
-	if elapsed > 0 && !completed {
-		return fmt.Sprintf("    [%s] Step %d/%d: %s [%s]", sb.String(), step, total, suffix, formatDuration(elapsed))
-	}
-	return fmt.Sprintf("    [%s] Step %d/%d: %s", sb.String(), step, total, suffix)
-}
-
-func tailStatesync(ctx context.Context, path string, out chan<- string, stop <-chan struct{}) {
-	defer close(out)
-	// Wait for log file to appear to avoid missing early snapshot lines
-	for {
-		if _, err := os.Stat(path); err == nil {
-			break
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-stop:
-			return
-		case <-time.After(300 * time.Millisecond):
-		}
-	}
-	f, err := os.Open(path)
-	if err != nil {
-		return
-	}
-	defer func() { _ = f.Close() }()
-	// Seek to end
-	if _, err := f.Seek(0, io.SeekEnd); err != nil {
-		return
-	}
-	r := bufio.NewReader(f)
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-stop:
-			return
-		default:
-		}
-		line, err := r.ReadString('\n')
-		if err != nil {
-			if err == io.EOF {
-				time.Sleep(50 * time.Millisecond)
-				continue
-			}
-			return
-		}
-		// Only forward relevant lines to reduce chatter
-		low := strings.ToLower(line)
-		if strings.Contains(low, "statesync") || strings.Contains(low, "state sync") || strings.Contains(low, "snapshot") {
-			out <- strings.TrimSpace(line)
-		}
-	}
 }
 
 func hostPortFromURL(s string) string {
@@ -895,9 +595,7 @@ func isSyncedQuick(local string) bool {
 	return !payload.Result.SyncInfo.CatchingUp
 }
 
-// isNodeAlive checks if the node's RPC is responding (used during restore phase)
-// During snapshot restore, the node may be busy but still alive - we don't want
-// to trigger "stuck" detection just because there are no log messages.
+// isNodeAlive checks if the node's RPC is responding
 func isNodeAlive(local string) bool {
 	local = strings.TrimRight(local, "/")
 	if local == "" {
@@ -1007,7 +705,7 @@ func renderProgress(percent float64, cur, remote int64) string {
 		filled = width
 	}
 	bar := strings.Repeat("█", filled) + strings.Repeat("░", width-filled)
-	return fmt.Sprintf("📊 Syncing [%s] %.2f%% | %d/%d blocks", bar, percent, cur, remote)
+	return fmt.Sprintf("Syncing [%s] %.2f%% | %d/%d blocks", bar, percent, cur, remote)
 }
 
 func renderProgressWithQuiet(percent float64, cur, remote int64, quiet bool) string {
@@ -1071,9 +769,6 @@ func strconvParseInt(s string) (int64, error) {
 	}
 	return sign * n, nil
 }
-
-// floor1 returns v floored to one decimal place.
-func floor1(v float64) float64 { return math.Floor(v*10.0) / 10.0 }
 
 // floor2 returns v floored to two decimal places.
 func floor2(v float64) float64 { return math.Floor(v*100.0) / 100.0 }

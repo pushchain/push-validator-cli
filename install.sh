@@ -784,7 +784,7 @@ MONIKER="${MONIKER:-push-validator}"
 GENESIS_DOMAIN="${GENESIS_DOMAIN:-rpc-testnet-donut-node1.push.org}"
 KEYRING_BACKEND="${KEYRING_BACKEND:-test}"
 CHAIN_ID="${CHAIN_ID:-push_42101-1}"
-SNAPSHOT_RPC="${SNAPSHOT_RPC:-https://rpc-testnet-donut-node2.push.org}"
+SNAPSHOT_URL="${SNAPSHOT_URL:-https://snapshots.donut.push.org}"
 RESET_DATA="${RESET_DATA:-yes}"
 AUTO_START="${AUTO_START:-yes}"
 PNM_REF="${PNM_REF:-main}"
@@ -810,7 +810,7 @@ while [[ $# -gt 0 ]]; do
     --genesis) GENESIS_DOMAIN="$2"; shift 2 ;;
     --keyring) KEYRING_BACKEND="$2"; shift 2 ;;
     --chain-id) CHAIN_ID="$2"; shift 2 ;;
-    --snapshot-rpc) SNAPSHOT_RPC="$2"; shift 2 ;;
+    --snapshot-url) SNAPSHOT_URL="$2"; shift 2 ;;
     --pchaind-ref) PCHAIN_REF="$2"; shift 2 ;;  # deprecated, use --pchain-ref
     --pchain-ref) PCHAIN_REF="$2"; shift 2 ;;
     --dev|--use-local) USE_LOCAL="yes"; shift ;;
@@ -833,7 +833,7 @@ while [[ $# -gt 0 ]]; do
       echo "  --moniker NAME       Set validator moniker (default: push-validator)"
       echo "  --chain-id ID        Set chain ID (default: push_42101-1)"
       echo "  --genesis DOMAIN     Genesis domain (default: rpc-testnet-donut-node1.push.org)"
-      echo "  --snapshot-rpc URL   Snapshot RPC URL (default: https://rpc-testnet-donut-node2.push.org)"
+      echo "  --snapshot-url URL   Snapshot download URL (default: https://snapshots.donut.push.org)"
       echo "  --keyring BACKEND    Keyring backend (default: test)"
       echo
       echo "Version Options:"
@@ -1252,17 +1252,17 @@ if [[ "$AUTO_START" = "yes" ]]; then
       --home "$HOME_DIR" \
       --chain-id "$CHAIN_ID" \
       --genesis-domain "$GENESIS_DOMAIN" \
-      --snapshot-rpc "$SNAPSHOT_RPC" \
+      --snapshot-url "$SNAPSHOT_URL" \
       --bin "${PCHAIND:-pchaind}" || { err "init failed"; exit 1; }
     ok "Node initialized"
 
-    # Optimize config for faster state sync
+    # Optimize config for faster sync
     step "Optimizing node configuration"
     APP_TOML="$HOME_DIR/config/app.toml"
     CONFIG_TOML="$HOME_DIR/config/config.toml"
 
     if [[ -f "$APP_TOML" ]]; then
-      # Increase IAVL cache size for faster state sync (default: 781250 -> 2000000)
+      # Increase IAVL cache size for faster sync (default: 781250 -> 2000000)
       sed -i.bak 's/^iavl-cache-size = .*/iavl-cache-size = 2000000/' "$APP_TOML" 2>/dev/null || \
         sed -i '' 's/^iavl-cache-size = .*/iavl-cache-size = 2000000/' "$APP_TOML" 2>/dev/null || true
       rm -f "$APP_TOML.bak" 2>/dev/null || true
@@ -1303,7 +1303,7 @@ if [[ "$AUTO_START" = "yes" ]]; then
 
     "$MANAGER_BIN" start --no-prompt --home "$HOME_DIR" --bin "${PCHAIND:-pchaind}" 2>&1 | indent_output || { err "start failed"; exit 1; }
 
-    step "Waiting for state sync"
+    step "Waiting for sync"
     # Stream compact sync until fully synced (monitor prints snapshot/block progress)
     set +e
     "$MANAGER_BIN" sync --compact --window 30 --rpc "http://127.0.0.1:26657" --remote "https://$GENESIS_DOMAIN:443" --skip-final-message
@@ -1328,7 +1328,7 @@ if [[ "$AUTO_START" = "yes" ]]; then
         echo
         echo "Common causes:"
         echo "  • Network connectivity issues"
-        echo "  • State sync snapshot corruption (app hash mismatch)"
+        echo "  • Snapshot corruption (app hash mismatch)"
         echo "  • RPC server temporarily unavailable"
         echo "  • Insufficient peers for sync"
         echo

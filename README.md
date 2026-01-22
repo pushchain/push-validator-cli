@@ -8,7 +8,7 @@
 ```bash
 curl -fsSL https://get.push.network/node/install.sh | bash
 ```
-Automatically installs and starts your validator using state sync (no full sync needed).
+Automatically installs and starts your validator using snapshot download (no full sync needed).
 
 > **Note:** Restart terminal or run `source ~/.bashrc` to use `push-validator` from anywhere.
 
@@ -16,7 +16,7 @@ Automatically installs and starts your validator using state sync (no full sync 
 ```bash
 push-validator status
 ```
-Wait for: `✅ Catching Up: false` (state sync takes ~1 hour, then block sync begins)
+Wait for: `✅ Catching Up: false` (snapshot download takes ~15-30 mins depending on connection, then block sync begins)
 
 ### Step 3: Register Validator
 ```bash
@@ -75,7 +75,7 @@ The dashboard provides everything you need to monitor validator health and perfo
 
 ### Core
 ```bash
-push-validator start                # Start node with state sync
+push-validator start                # Start node with snapshot sync
 push-validator stop                 # Stop node
 push-validator status               # Check sync & validator status
 push-validator dashboard            # Live interactive monitoring dashboard
@@ -111,24 +111,53 @@ push-validator update          # Update CLI to latest version
 
 ## ⚡ Features
 
-- **State Sync**: ~1 hour sync (no full blockchain download required)
+- **Snapshot Download**: Fast sync (~15-30 mins, no full blockchain download required)
 - **Interactive Logs**: Real-time log viewer with search and filtering
 - **Smart Detection**: Monitors for sync stalls and network issues
 - **Reliable Snapshots**: Uses trusted RPC nodes for recovery
 - **Multiple Outputs**: JSON, YAML, or text format support
 
+## 🔄 Automatic Upgrades (Cosmovisor)
+
+Your validator uses [Cosmovisor](https://docs.cosmos.network/main/build/tooling/cosmovisor) for seamless, zero-downtime upgrades.
+
+### How It Works
+
+1. **Governance Proposal** - Network votes on upgrade proposal specifying target block height
+2. **Auto-Download** - When approved, Cosmovisor automatically downloads the new binary
+3. **Checksum Verification** - Binary verified via SHA256 before use
+4. **Seamless Switch** - At upgrade height, node stops, switches binary, and restarts automatically
+
+**No manual intervention required** - your validator stays up-to-date automatically.
+
+### Directory Structure
+
+```
+~/.pchain/cosmovisor/
+├── genesis/bin/pchaind     # Initial binary
+├── upgrades/               # Upgrade binaries (auto-populated)
+│   └── {upgrade-name}/bin/pchaind
+└── current -> genesis/     # Symlink to active version
+```
+
+### Commands
+
+```bash
+push-validator cosmovisor status    # Check versions & pending upgrades
+```
+
 ## 🔧 Troubleshooting
 
-### State Sync Failures / App Mismatch Errors
+### Sync Failures / App Mismatch Errors
 
-If you encounter state sync failures or app hash mismatch errors, reset and restart:
+If you encounter sync failures or app hash mismatch errors, reset and restart:
 
 ```bash
 push-validator reset
 push-validator start
 ```
 
-This clears the chain data and initiates a fresh state sync. State sync takes approximately 1 hour, after which block sync will begin automatically.
+This clears the chain data and downloads a fresh snapshot. Snapshot download takes approximately 15-30 minutes depending on your connection, after which block sync will begin automatically.
 
 ## 📊 Network
 

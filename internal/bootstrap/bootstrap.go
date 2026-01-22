@@ -14,38 +14,32 @@ import (
 	"time"
 
 	"github.com/pushchain/push-validator-cli/internal/files"
-	"github.com/pushchain/push-validator-cli/internal/statesync"
+	"github.com/pushchain/push-validator-cli/internal/snapshot"
 )
 
-// Hardcoded fullnode peers for state sync (fullnodes have snapshots enabled, validators don't)
+// Hardcoded fullnode peers for P2P connectivity
 var fullnodePeers = []string{
 	"6751a6539368608a65512d1a4b7ede4a9cd5004f@136.112.142.137:26656",
 	"374573900e4365bea5d946dd69c7343e56e4f375@34.72.243.200:26656",
 	"deda68a955b352bb201ab54422de1ab35db46652@136.113.195.0:26656",
 }
 
-// Fullnode RPC URLs for state sync verification
-var fullnodeRPCs = []string{
-	"http://136.112.142.137:26657",
-	"http://34.72.243.200:26657",
-	"http://136.113.195.0:26657",
-}
-
+// Options configures the bootstrap process.
 type Options struct {
-	HomeDir              string
-	ChainID              string
-	Moniker              string
-	Denom                string       // e.g., upc
-	GenesisDomain        string       // e.g., donut.rpc.push.org
-	BinPath              string       // pchaind path
-	SnapshotRPC string // e.g., https://donut.rpc.push.org
-	Progress             func(string) // optional callback for progress messages
-	Attempt              int          // Retry attempt number (0-based), used to rotate fullnode RPCs
+	HomeDir       string                  // Node home directory (e.g., ~/.pchain)
+	ChainID       string                  // Chain ID (e.g., push_42101-1)
+	Moniker       string                  // Node moniker
+	Denom         string                  // Staking denom (e.g., upc)
+	GenesisDomain string                  // Genesis RPC domain (e.g., donut.rpc.push.org)
+	BinPath       string                  // Path to pchaind binary
+	SnapshotURL   string                  // Base URL for snapshot downloads
+	Progress      func(string)            // Progress message callback
+	SnapshotProgress snapshot.ProgressFunc // Detailed snapshot progress callback
 }
 
+// Service bootstraps a new node with snapshot download.
 type Service interface {
 	Init(ctx context.Context, opts Options) error
-	ReconfigureStateSync(ctx context.Context, opts Options) error
 }
 
 // HTTPDoer matches http.Client's Do.
@@ -59,28 +53,32 @@ type Runner interface {
 }
 
 type svc struct {
-	http HTTPDoer
-	run  Runner
-	stp  statesync.Provider
+	http     HTTPDoer
+	run      Runner
+	snapshot snapshot.Service
 }
 
 // New builds a default service with real http client and runner.
 func New() Service {
-	return &svc{http: &http.Client{Timeout: 5 * time.Second}, run: defaultRunner{}, stp: statesync.New()}
+	return &svc{
+		http:     &http.Client{Timeout: 15 * time.Second},
+		run:      defaultRunner{},
+		snapshot: snapshot.New(),
+	}
 }
 
-// NewWith allows injecting http client, runner, and statesync provider for testing.
-func NewWith(h HTTPDoer, r Runner, p statesync.Provider) Service {
+// NewWith allows injecting dependencies for testing.
+func NewWith(h HTTPDoer, r Runner, s snapshot.Service) Service {
 	if h == nil {
-		h = &http.Client{Timeout: 5 * time.Second}
+		h = &http.Client{Timeout: 15 * time.Second}
 	}
 	if r == nil {
 		r = defaultRunner{}
 	}
-	if p == nil {
-		p = statesync.New()
+	if s == nil {
+		s = snapshot.New()
 	}
-	return &svc{http: h, run: r, stp: p}
+	return &svc{http: h, run: r, snapshot: s}
 }
 
 type defaultRunner struct{}
@@ -92,6 +90,7 @@ func (defaultRunner) Run(ctx context.Context, name string, args ...string) error
 	return cmd.Run()
 }
 
+// Init initializes a new node by downloading a snapshot.
 func (s *svc) Init(ctx context.Context, opts Options) error {
 	if opts.HomeDir == "" || opts.ChainID == "" {
 		return errors.New("HomeDir and ChainID required")
@@ -108,13 +107,16 @@ func (s *svc) Init(ctx context.Context, opts Options) error {
 	if opts.GenesisDomain == "" {
 		return errors.New("GenesisDomain required")
 	}
+	if opts.SnapshotURL == "" {
+		opts.SnapshotURL = snapshot.DefaultSnapshotURL
+	}
 
 	progress := opts.Progress
 	if progress == nil {
 		progress = func(string) {} // no-op if not provided
 	}
 
-	// Ensure base dirs
+	// Step 1: Ensure base directories
 	progress("Setting up node directories...")
 	if err := os.MkdirAll(filepath.Join(opts.HomeDir, "config"), 0o755); err != nil {
 		return err
@@ -123,7 +125,7 @@ func (s *svc) Init(ctx context.Context, opts Options) error {
 		return err
 	}
 
-	// Run `pchaind init` if config is missing
+	// Step 2: Run `pchaind init` if config is missing
 	cfgPath := filepath.Join(opts.HomeDir, "config", "config.toml")
 	if _, err := os.Stat(cfgPath); os.IsNotExist(err) {
 		progress("Running pchaind init...")
@@ -138,7 +140,7 @@ func (s *svc) Init(ctx context.Context, opts Options) error {
 		}
 	}
 
-	// Fetch genesis from remote
+	// Step 3: Fetch genesis from remote
 	progress("Fetching genesis from network...")
 	base := baseURL(opts.GenesisDomain)
 	genesisURL := base + "/genesis"
@@ -151,25 +153,24 @@ func (s *svc) Init(ctx context.Context, opts Options) error {
 		return err
 	}
 
-	// Use hardcoded fullnode peers (fullnodes have snapshots enabled, validators don't)
-	progress("Using fullnode peers for state sync...")
-	peers := fullnodePeers
-
-	// Set snapshot RPC (use first fullnode if not specified)
-	snapshotRPC := opts.SnapshotRPC
-	if snapshotRPC == "" {
-		snapshotRPC = fullnodeRPCs[0]
-	}
-
-	// Configure peers via config store
+	// Step 4: Configure persistent peers
+	progress("Configuring persistent peers...")
 	cfgs := files.New(opts.HomeDir)
-	if len(peers) > 0 {
-		if err := cfgs.SetPersistentPeers(peers); err != nil {
-			return err
-		}
+	if err := cfgs.SetPersistentPeers(fullnodePeers); err != nil {
+		return err
 	}
 
-	// Write priv_validator_state.json if missing
+	// Step 5: Backup config before modifications
+	progress("Backing up configuration...")
+	_, _ = cfgs.Backup() // best-effort
+
+	// Step 6: Disable state sync (we're using snapshot download instead)
+	progress("Configuring node for snapshot sync...")
+	if err := cfgs.DisableStateSync(); err != nil {
+		return err
+	}
+
+	// Step 7: Write priv_validator_state.json if missing
 	pvs := filepath.Join(opts.HomeDir, "data", "priv_validator_state.json")
 	if _, err := os.Stat(pvs); os.IsNotExist(err) {
 		if err := os.MkdirAll(filepath.Dir(pvs), 0o755); err != nil {
@@ -180,81 +181,21 @@ func (s *svc) Init(ctx context.Context, opts Options) error {
 		}
 	}
 
-	// Configure state sync parameters using snapshot RPC
-	progress("Configuring state sync parameters...")
-	tp, err := s.stp.ComputeTrust(ctx, snapshotRPC)
-	if err != nil {
-		return fmt.Errorf("compute trust params: %w", err)
-	}
-	// Build RPC servers list using all available fullnode RPCs for better distribution
-	var rpcServers []string
-	for _, rpc := range fullnodeRPCs {
-		rpcServers = append(rpcServers, hostToStateSyncURL(rpc))
-	}
-	progress("Backing up configuration...")
-	if _, err := cfgs.Backup(); err == nil { /* best-effort */
-	}
-	progress("Enabling state sync...")
-	if err := cfgs.EnableStateSync(files.StateSyncParams{
-		TrustHeight:         tp.Height,
-		TrustHash:           tp.Hash,
-		RPCServers:          rpcServers,
-		TrustPeriod:         "336h0m0s",
-		ChunkFetchers:       6,       // Balanced: 3 per peer when 2 peers share snapshot
-		ChunkRequestTimeout: "60m0s", // Extended timeout for slow/congested networks
-		DiscoveryTime:       "90s",   // More time to discover all available snapshots
+	// Step 8: Download and extract snapshot
+	progress("Downloading blockchain snapshot...")
+	if err := s.snapshot.Download(ctx, snapshot.Options{
+		SnapshotURL: opts.SnapshotURL,
+		HomeDir:     opts.HomeDir,
+		Progress:    opts.SnapshotProgress,
 	}); err != nil {
-		return err
+		return fmt.Errorf("download snapshot: %w", err)
 	}
 
-	// Clear data for state sync
-	progress("Preparing for initial sync...")
-	_ = s.run.Run(ctx, opts.BinPath, "tendermint", "unsafe-reset-all", "--home", opts.HomeDir, "--keep-addr-book")
-	// Mark initial state sync flag
-	_ = os.WriteFile(filepath.Join(opts.HomeDir, ".initial_state_sync"), []byte(time.Now().Format(time.RFC3339)), 0o644)
+	// Mark successful snapshot download
+	_ = os.WriteFile(filepath.Join(opts.HomeDir, ".snapshot_downloaded"), []byte(time.Now().Format(time.RFC3339)), 0o644)
 
+	progress("Snapshot downloaded and extracted successfully")
 	return nil
-}
-
-// ReconfigureStateSync updates state sync configuration with fresh trust parameters.
-// This is used during retry logic when the previous sync attempt failed.
-// The Attempt field in opts is used to rotate through fullnode RPCs, so each retry
-// uses a different peer's snapshot (which may be available from multiple peers).
-func (s *svc) ReconfigureStateSync(ctx context.Context, opts Options) error {
-	if opts.HomeDir == "" {
-		return errors.New("HomeDir required")
-	}
-
-	snapshotRPC := opts.SnapshotRPC
-	if snapshotRPC == "" {
-		// Rotate through fullnode RPCs based on attempt number
-		// This ensures each retry uses a different peer's trust height/snapshot
-		rpcIndex := opts.Attempt % len(fullnodeRPCs)
-		snapshotRPC = fullnodeRPCs[rpcIndex]
-	}
-
-	// Compute fresh trust parameters
-	tp, err := s.stp.ComputeTrust(ctx, snapshotRPC)
-	if err != nil {
-		return fmt.Errorf("compute trust params: %w", err)
-	}
-
-	// Build RPC servers list using all available fullnode RPCs for better distribution
-	var rpcServers []string
-	for _, rpc := range fullnodeRPCs {
-		rpcServers = append(rpcServers, hostToStateSyncURL(rpc))
-	}
-
-	cfgs := files.New(opts.HomeDir)
-	return cfgs.EnableStateSync(files.StateSyncParams{
-		TrustHeight:         tp.Height,
-		TrustHash:           tp.Hash,
-		RPCServers:          rpcServers,
-		TrustPeriod:         "336h0m0s",
-		ChunkFetchers:       6,
-		ChunkRequestTimeout: "60m0s",
-		DiscoveryTime:       "90s",
-	})
 }
 
 // ---- helpers ----
@@ -283,78 +224,13 @@ func (s *svc) getGenesis(ctx context.Context, url string) ([]byte, error) {
 	return payload.Result.Genesis, nil
 }
 
-func hostToStateSyncURL(rpc string) string {
-	// Convert base https://host[:port] to https://host:443 for state sync
-	rpc = strings.TrimRight(rpc, "/")
-	if strings.HasPrefix(rpc, "http://") {
-		h := strings.TrimPrefix(rpc, "http://")
-		if strings.Contains(h, ":") {
-			return "http://" + h
-		}
-		return "http://" + h + ":80"
-	}
-	if strings.HasPrefix(rpc, "https://") {
-		h := strings.TrimPrefix(rpc, "https://")
-		if strings.Contains(h, ":") {
-			return "https://" + h
-		}
-		return "https://" + h + ":443"
-	}
-	// default to https
-	if strings.Contains(rpc, ":") {
-		return "https://" + rpc
-	}
-	return "https://" + rpc + ":443"
-}
-
 func baseURL(genesisDomain string) string {
 	d := strings.TrimSpace(genesisDomain)
 	if strings.HasPrefix(d, "http://") || strings.HasPrefix(d, "https://") {
 		return d
 	}
 	if d == "" {
-		return fullnodeRPCs[0] // Use fullnode-1 as default
+		return "https://donut.rpc.push.org"
 	}
 	return "https://" + d
-}
-
-// pickWorkingRPCs returns a subset of URLs that respond to a JSON-RPC POST (method=status) within timeout.
-func (s *svc) pickWorkingRPCs(ctx context.Context, urls []string) []string {
-	type req struct {
-		JSONRPC string `json:"jsonrpc"`
-		Method  string `json:"method"`
-		ID      int    `json:"id"`
-	}
-	httpc := &http.Client{Timeout: 6 * time.Second}
-	var out []string
-	for _, u := range urls {
-		// Support bare hosts (e.g., from local tests) by defaulting to http://
-		if !(strings.HasPrefix(u, "http://") || strings.HasPrefix(u, "https://")) {
-			u = "http://" + strings.TrimRight(u, "/")
-		}
-		// Make a shallow copy of ctx with short timeout per probe
-		// attempt twice with short backoff
-		var ok bool
-		for attempt := 0; attempt < 2 && !ok; attempt++ {
-			cctx, cancel := context.WithTimeout(ctx, 6*time.Second)
-			body, _ := json.Marshal(req{JSONRPC: "2.0", Method: "status", ID: 1})
-			rq, _ := http.NewRequestWithContext(cctx, http.MethodPost, u, strings.NewReader(string(body)))
-			rq.Header.Set("Content-Type", "application/json")
-			resp, err := httpc.Do(rq)
-			cancel()
-			if err == nil && resp != nil && resp.StatusCode == 200 {
-				_ = resp.Body.Close()
-				ok = true
-				break
-			}
-			if resp != nil {
-				_ = resp.Body.Close()
-			}
-			time.Sleep(300 * time.Millisecond)
-		}
-		if ok {
-			out = append(out, u)
-		}
-	}
-	return out
 }

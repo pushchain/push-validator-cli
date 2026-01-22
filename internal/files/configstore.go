@@ -87,6 +87,10 @@ func (s *store) DisableStateSync() error {
 	if err != nil {
 		return err
 	}
+	// Ensure [statesync] section exists
+	if !regexp.MustCompile(`(?m)^\[statesync\]\s*$`).MatchString(content) {
+		content += "\n[statesync]\n"
+	}
 	content = setInSection(content, "statesync", map[string]string{
 		"enable": "false",
 	})

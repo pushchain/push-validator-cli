@@ -171,26 +171,26 @@ func (s *CosmovisorSupervisor) Start(opts StartOpts) (int, error) {
 		}
 	}
 
-	// Check if this node needs state sync (fresh start or marked for sync)
-	needsStateSyncPath := filepath.Join(opts.HomeDir, ".initial_state_sync")
+	// Check if this node needs initial sync (fresh start or marked for sync)
+	needsInitialSyncPath := filepath.Join(opts.HomeDir, ".initial_state_sync")
 	blockstorePath := filepath.Join(opts.HomeDir, "data", "blockstore.db")
 
-	needsStateSync := false
-	if _, err := os.Stat(needsStateSyncPath); err == nil {
-		needsStateSync = true
+	needsInitialSync := false
+	if _, err := os.Stat(needsInitialSyncPath); err == nil {
+		needsInitialSync = true
 	} else if _, err := os.Stat(blockstorePath); os.IsNotExist(err) {
-		needsStateSync = true
+		needsInitialSync = true
 	}
 
-	// If state sync is needed, reset data right before starting
-	if needsStateSync {
+	// If initial sync is needed, reset data right before starting
+	if needsInitialSync {
 		// Use the genesis binary for reset
 		bin := filepath.Join(s.cosmoSvc.GenesisDir(), "pchaind")
 		if _, err := os.Stat(bin); os.IsNotExist(err) {
 			bin = "pchaind" // Fall back to PATH
 		}
 
-		// Run tendermint unsafe-reset-all to clear data for state sync
+		// Run tendermint unsafe-reset-all to clear data for sync
 		cmd := exec.Command(bin, "tendermint", "unsafe-reset-all", "--home", opts.HomeDir, "--keep-addr-book")
 		if err := cmd.Run(); err != nil {
 			// Non-fatal: continue anyway as node might work
@@ -205,7 +205,7 @@ func (s *CosmovisorSupervisor) Start(opts StartOpts) (int, error) {
 		}
 
 		// Remove the marker file after processing
-		_ = os.Remove(needsStateSyncPath)
+		_ = os.Remove(needsInitialSyncPath)
 	}
 
 	// Ensure logs directory exists
