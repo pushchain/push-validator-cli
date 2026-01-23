@@ -38,18 +38,3 @@ type DelegateArgs struct {
     KeyName string
 }
 
-// New returns a stub validator service.
-func New() Service { return &noop{} }
-
-type noop struct{}
-
-func (n *noop) EnsureKey(ctx context.Context, name string) (KeyInfo, error)                  { return KeyInfo{}, nil }
-func (n *noop) ImportKey(ctx context.Context, name string, mnemonic string) (KeyInfo, error) { return KeyInfo{}, nil }
-func (n *noop) GetEVMAddress(ctx context.Context, addr string) (string, error)               { return "", nil }
-func (n *noop) IsValidator(ctx context.Context, addr string) (bool, error) { return false, nil }
-func (n *noop) Balance(ctx context.Context, addr string) (string, error) { return "0", nil }
-func (n *noop) Register(ctx context.Context, args RegisterArgs) (string, error) { return "", nil }
-func (n *noop) Unjail(ctx context.Context, keyName string) (string, error) { return "", nil }
-func (n *noop) WithdrawRewards(ctx context.Context, validatorAddr string, keyName string, includeCommission bool) (string, error) { return "", nil }
-func (n *noop) Delegate(ctx context.Context, args DelegateArgs) (string, error) { return "", nil }
-

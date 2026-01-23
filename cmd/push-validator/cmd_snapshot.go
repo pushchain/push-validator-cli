@@ -155,8 +155,15 @@ Examples:
 				if flagOutput == "json" {
 					return
 				}
-				if phase == snapshot.PhaseExtract && message != "" {
-					fmt.Printf("\r  → Extracting: %-60s", truncate(message, 60))
+				switch phase {
+				case snapshot.PhaseVerify:
+					if message != "" {
+						fmt.Printf("  → %s\n", message)
+					}
+				case snapshot.PhaseExtract:
+					if message != "" {
+						fmt.Printf("\r  → Extracting: %-60s", truncate(message, 60))
+					}
 				}
 			}
 

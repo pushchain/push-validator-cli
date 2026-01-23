@@ -13,20 +13,35 @@ import (
 	"time"
 
 	"github.com/pushchain/push-validator-cli/internal/config"
+	"github.com/pushchain/push-validator-cli/internal/cosmovisor"
+	"github.com/pushchain/push-validator-cli/internal/process"
 	"github.com/pushchain/push-validator-cli/internal/validator"
 	ui "github.com/pushchain/push-validator-cli/internal/ui"
 	"golang.org/x/term"
 )
 
+// newSupervisor creates a process supervisor, using cosmovisor if available and configured.
+func newSupervisor(homeDir string) process.Supervisor {
+	if detection := cosmovisor.Detect(homeDir); detection.Available && detection.SetupComplete {
+		return process.NewCosmovisor(homeDir)
+	}
+	return process.New(homeDir)
+}
+
 // findPchaind returns the path to the pchaind binary, resolving
-// either PCHAIND or PCHAIN_BIN environment variables, checking the
+// either --bin flag, PCHAIND or PCHAIN_BIN environment variables, checking the
 // cosmovisor genesis directory, or falling back to PATH lookup.
 func findPchaind() string {
+    if flagBin != "" { return flagBin }
     if v := os.Getenv("PCHAIND"); v != "" { return v }
     if v := os.Getenv("PCHAIN_BIN"); v != "" { return v }
 
     // Check cosmovisor genesis directory (primary location after install.sh)
-    homeDir := os.Getenv("HOME_DIR")
+    // Priority: --home flag > HOME_DIR env > default ~/.pchain
+    homeDir := flagHome
+    if homeDir == "" {
+        homeDir = os.Getenv("HOME_DIR")
+    }
     if homeDir == "" {
         if home, err := os.UserHomeDir(); err == nil {
             homeDir = filepath.Join(home, ".pchain")
@@ -51,9 +66,14 @@ func getPrinter() ui.Printer { return ui.NewPrinter(flagOutput) }
 
 // convertValidatorToAccountAddress converts a validator operator address (pushvaloper...)
 // to its corresponding account address (push...) using pchaind debug addr
-func convertValidatorToAccountAddress(validatorAddress string) (string, error) {
+func convertValidatorToAccountAddress(ctx context.Context, validatorAddress string) (string, error) {
+	if ctx == nil {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+	}
 	bin := findPchaind()
-	cmd := exec.Command(bin, "debug", "addr", validatorAddress)
+	cmd := exec.CommandContext(ctx, bin, "debug", "addr", validatorAddress)
 	output, err := cmd.Output()
 	if err != nil {
 		return "", fmt.Errorf("failed to convert address: %w", err)
@@ -81,9 +101,14 @@ func convertValidatorToAccountAddress(validatorAddress string) (string, error) {
 
 // getEVMAddress converts a bech32 address (push...) to EVM hex format (0x...)
 // using pchaind debug addr command
-func getEVMAddress(address string) (string, error) {
+func getEVMAddress(ctx context.Context, address string) (string, error) {
+	if ctx == nil {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+	}
 	bin := findPchaind()
-	cmd := exec.Command(bin, "debug", "addr", address)
+	cmd := exec.CommandContext(ctx, bin, "debug", "addr", address)
 	output, err := cmd.Output()
 	if err != nil {
 		return "", fmt.Errorf("failed to convert address to EVM format: %w", err)
@@ -110,14 +135,19 @@ func getEVMAddress(address string) (string, error) {
 
 // hexToBech32Address converts a hex address (0x... or just hex bytes) to bech32 format (push1...)
 // using pchaind debug addr command
-func hexToBech32Address(hexAddr string) (string, error) {
+func hexToBech32Address(ctx context.Context, hexAddr string) (string, error) {
+	if ctx == nil {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+	}
 	// Remove 0x prefix if present
 	if strings.HasPrefix(hexAddr, "0x") || strings.HasPrefix(hexAddr, "0X") {
 		hexAddr = hexAddr[2:]
 	}
 
 	bin := findPchaind()
-	cmd := exec.Command(bin, "debug", "addr", hexAddr)
+	cmd := exec.CommandContext(ctx, bin, "debug", "addr", hexAddr)
 	output, err := cmd.Output()
 	if err != nil {
 		return "", fmt.Errorf("failed to convert hex address to bech32: %w", err)
@@ -138,9 +168,14 @@ func hexToBech32Address(hexAddr string) (string, error) {
 }
 
 // findKeyNameByAddress finds the key name in the keyring that corresponds to the given address
-func findKeyNameByAddress(cfg config.Config, accountAddress string) (string, error) {
+func findKeyNameByAddress(ctx context.Context, cfg config.Config, accountAddress string) (string, error) {
+	if ctx == nil {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+	}
 	bin := findPchaind()
-	cmd := exec.Command(bin, "keys", "list", "--keyring-backend", cfg.KeyringBackend, "--home", cfg.HomeDir, "--output", "json")
+	cmd := exec.CommandContext(ctx, bin, "keys", "list", "--keyring-backend", cfg.KeyringBackend, "--home", cfg.HomeDir, "--output", "json")
 	output, err := cmd.Output()
 	if err != nil {
 		return "", fmt.Errorf("failed to list keys: %w", err)
@@ -188,7 +223,6 @@ func waitForSufficientBalance(cfg config.Config, accountAddr string, evmAddr str
 
 		if err != nil {
 			fmt.Printf("⚠️ Balance check failed: %v\n", err)
-			tries++
 			time.Sleep(2 * time.Second)
 			continue
 		}

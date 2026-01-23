@@ -5,7 +5,6 @@ import (
     "encoding/json"
     "fmt"
     "net/http"
-    "net/url"
     "strconv"
     "strings"
     "time"
@@ -15,7 +14,6 @@ import (
 type Client interface {
     Status(ctx context.Context) (Status, error)
     RemoteStatus(ctx context.Context, baseURL string) (Status, error)
-    BlockHash(ctx context.Context, height int64) (string, error)
     Peers(ctx context.Context) ([]Peer, error)
     SubscribeHeaders(ctx context.Context) (<-chan Header, error)
 }
@@ -100,22 +98,6 @@ func (c *httpClient) RemoteStatus(ctx context.Context, baseURL string) (Status, 
         CatchingUp: payload.Result.SyncInfo.CatchingUp,
         Height:     h,
     }, nil
-}
-
-func (c *httpClient) BlockHash(ctx context.Context, height int64) (string, error) {
-    u := c.base + "/block"
-    if height > 0 {
-        q := url.Values{}
-        q.Set("height", strconv.FormatInt(height, 10))
-        u += "?" + q.Encode()
-    }
-    req, _ := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
-    resp, err := c.http.Do(req)
-    if err != nil { return "", err }
-    defer func() { _ = resp.Body.Close() }()
-    var payload struct{ Result struct{ BlockID struct{ Hash string `json:"hash"` } `json:"block_id"` } `json:"result"` }
-    if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil { return "", err }
-    return strings.ToUpper(payload.Result.BlockID.Hash), nil
 }
 
 func (c *httpClient) Peers(ctx context.Context) ([]Peer, error) {

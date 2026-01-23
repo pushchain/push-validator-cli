@@ -26,7 +26,7 @@ import (
 // - ask for confirmation to restake rewards with edit/cancel options
 // - submit delegation transaction
 // - display results
-func handleRestakeRewardsAll(cfg config.Config) {
+func handleRestakeRewardsAll(cfg config.Config) error {
 	p := ui.NewPrinter(flagOutput)
 
 	if flagOutput != "json" {
@@ -44,7 +44,7 @@ func handleRestakeRewardsAll(cfg config.Config) {
 	if local == "" {
 		local = "http://127.0.0.1:26657"
 	}
-	remoteHTTP := "https://" + strings.TrimSuffix(cfg.GenesisDomain, "/") + ":443"
+	remoteHTTP := cfg.RemoteRPCURL()
 	cliLocal := node.New(local)
 	cliRemote := node.New(remoteHTTP)
 
@@ -63,7 +63,7 @@ func handleRestakeRewardsAll(cfg config.Config) {
 			fmt.Println(p.Colors.Info("Please verify your node is running and properly configured."))
 			fmt.Println()
 		}
-		return
+		return fmt.Errorf("failed to check sync status")
 	}
 
 	if stLocal.CatchingUp {
@@ -77,7 +77,7 @@ func handleRestakeRewardsAll(cfg config.Config) {
 			fmt.Println(p.Colors.Apply(p.Colors.Theme.Command, "  push-validator sync"))
 			fmt.Println()
 		}
-		return
+		return fmt.Errorf("node is still syncing")
 	}
 
 	if flagOutput != "json" {
@@ -101,7 +101,7 @@ func handleRestakeRewardsAll(cfg config.Config) {
 			fmt.Println(p.Colors.Error("❌ Failed to check validator status"))
 			fmt.Println()
 		}
-		return
+		return fmt.Errorf("failed to check validator status: %w", statusErr)
 	}
 
 	if !myVal.IsValidator {
@@ -112,10 +112,10 @@ func handleRestakeRewardsAll(cfg config.Config) {
 			fmt.Println(p.Colors.Warning("⚠️ This node is not registered as a validator"))
 			fmt.Println()
 			fmt.Println(p.Colors.Info("Register first using:"))
-			fmt.Println(p.Colors.Apply(p.Colors.Theme.Command, "  push-validator register"))
+			fmt.Println(p.Colors.Apply(p.Colors.Theme.Command, "  push-validator register-validator"))
 			fmt.Println()
 		}
-		return
+		return fmt.Errorf("node is not registered as validator")
 	}
 
 	if flagOutput != "json" {
@@ -145,7 +145,7 @@ func handleRestakeRewardsAll(cfg config.Config) {
 			fmt.Printf("Error: %v\n", rewardsErr)
 			fmt.Println()
 		}
-		return
+		return fmt.Errorf("failed to fetch rewards: %w", rewardsErr)
 	}
 
 	// Display rewards summary
@@ -172,7 +172,7 @@ func handleRestakeRewardsAll(cfg config.Config) {
 			fmt.Println(p.Colors.Info("Nothing to restake. Continue earning rewards and try again later."))
 			fmt.Println()
 		}
-		return
+		return fmt.Errorf("no significant rewards available")
 	}
 
 	// Step 4: Auto-detect key name from validator
@@ -180,9 +180,14 @@ func handleRestakeRewardsAll(cfg config.Config) {
 	var keyName string
 
 	if myVal.Address != "" {
-		accountAddr, convErr := convertValidatorToAccountAddress(myVal.Address)
+		ctx4, cancel4 := context.WithTimeout(context.Background(), 5*time.Second)
+		accountAddr, convErr := convertValidatorToAccountAddress(ctx4, myVal.Address)
+		cancel4()
 		if convErr == nil {
-			if foundKey, findErr := findKeyNameByAddress(cfg, accountAddr); findErr == nil {
+			ctx4b, cancel4b := context.WithTimeout(context.Background(), 5*time.Second)
+			foundKey, findErr := findKeyNameByAddress(ctx4b, cfg, accountAddr)
+			cancel4b()
+			if findErr == nil {
 				keyName = foundKey
 				if flagOutput != "json" {
 					fmt.Printf("🔑 Using key: %s\n", keyName)
@@ -226,7 +231,7 @@ func handleRestakeRewardsAll(cfg config.Config) {
 			fmt.Printf("Error: %v\n", withdrawErr)
 			fmt.Println()
 		}
-		return
+		return fmt.Errorf("withdrawal transaction failed: %w", withdrawErr)
 	}
 
 	if flagOutput != "json" {
@@ -256,7 +261,7 @@ func handleRestakeRewardsAll(cfg config.Config) {
 			fmt.Println("Funds have been withdrawn to your wallet but are too small to restake.")
 			fmt.Println()
 		}
-		return
+		return fmt.Errorf("insufficient balance for restaking after gas reserve")
 	}
 
 	// Step 7: Display restaking options
@@ -312,7 +317,7 @@ func handleRestakeRewardsAll(cfg config.Config) {
 						"cancelled":       true,
 					})
 				}
-				return
+				return nil
 			} else if input == "edit" || input == "e" {
 				// Allow user to edit amount
 				fmt.Println()
@@ -355,7 +360,7 @@ func handleRestakeRewardsAll(cfg config.Config) {
 				fmt.Println()
 				fmt.Println(p.Colors.Info("Invalid input. Restaking cancelled."))
 				fmt.Println()
-				return
+				return fmt.Errorf("restaking cancelled by user")
 			}
 		}
 	}
@@ -396,7 +401,7 @@ func handleRestakeRewardsAll(cfg config.Config) {
 			fmt.Println(p.Colors.Info("You can manually delegate using: push-validator increase-stake"))
 			fmt.Println()
 		}
-		return
+		return fmt.Errorf("restaking transaction failed: %w", delegateErr)
 	}
 
 	if flagOutput != "json" {
@@ -436,4 +441,5 @@ func handleRestakeRewardsAll(cfg config.Config) {
 		fmt.Println(p.Colors.Apply(p.Colors.Theme.Description, "  Your validator power has been increased!"))
 		fmt.Println()
 	}
+	return nil
 }

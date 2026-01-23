@@ -5,6 +5,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/pushchain/push-validator-cli/internal/ui"
 )
 
 // ChainStatus component shows chain sync status
@@ -110,9 +111,9 @@ func (c *ChainStatus) renderContent(w int) string {
 	if !c.data.NodeInfo.Running || !c.data.Metrics.Node.RPCListening {
 		lines = append(lines, fmt.Sprintf("%s Unknown", c.icons.Err))
 		if remoteHeight > 0 {
-			lines = append(lines, fmt.Sprintf("%s/%s", formatWithCommas(localHeight), formatWithCommas(remoteHeight)))
+			lines = append(lines, fmt.Sprintf("%s/%s", ui.FormatNumber(localHeight), ui.FormatNumber(remoteHeight)))
 		} else {
-			lines = append(lines, fmt.Sprintf("Height: %s", formatWithCommas(localHeight)))
+			lines = append(lines, fmt.Sprintf("Height: %s", ui.FormatNumber(localHeight)))
 		}
 	} else {
 		// Always show sync-monitor-style progress bar
@@ -178,27 +179,10 @@ func renderSyncProgress(local, remote int64, noEmoji bool, isCatchingUp bool) st
 
 	return fmt.Sprintf("%s [%s] %.2f%% | %s/%s blocks",
 		icon, bar, percent,
-		formatWithCommas(local),
-		formatWithCommas(remote))
+		ui.FormatNumber(local),
+		ui.FormatNumber(remote))
 }
 
-// formatWithCommas adds comma separators to large numbers
-func formatWithCommas(n int64) string {
-	if n < 1000 {
-		return fmt.Sprintf("%d", n)
-	}
-
-	// Convert to string and add commas
-	s := fmt.Sprintf("%d", n)
-	var result string
-	for i, c := range s {
-		if i > 0 && (len(s)-i)%3 == 0 {
-			result += ","
-		}
-		result += string(c)
-	}
-	return result
-}
 
 // repeatStr repeats a string n times
 func repeatStr(s string, n int) string {

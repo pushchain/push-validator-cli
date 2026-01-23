@@ -3,7 +3,6 @@ package process
 import (
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -272,39 +271,3 @@ func IsRPCListening(hostport string, timeout time.Duration) bool {
 	return true
 }
 
-// TailFollow streams appended content from the log file to w until ctx cancellation via closeCh.
-// This is a naive poll-based follower to avoid non-portable fs notify deps.
-func TailFollow(path string, w io.Writer, stop <-chan struct{}) error {
-	f, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = f.Close() }()
-
-	// Start at end of file
-	if _, err := f.Seek(0, io.SeekEnd); err != nil {
-		return err
-	}
-
-	buf := make([]byte, 4096)
-	for {
-		select {
-		case <-stop:
-			return nil
-		default:
-		}
-		n, err := f.Read(buf)
-		if err != nil {
-			if errors.Is(err, io.EOF) {
-				time.Sleep(500 * time.Millisecond)
-				continue
-			}
-			return err
-		}
-		if n > 0 {
-			if _, werr := w.Write(buf[:n]); werr != nil {
-				return werr
-			}
-		}
-	}
-}

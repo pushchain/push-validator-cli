@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // Config holds user/system configuration for the manager.
@@ -40,4 +41,9 @@ func Load() Config {
 		cfg.HomeDir = v
 	}
 	return cfg
+}
+
+// RemoteRPCURL returns the full HTTPS RPC URL derived from GenesisDomain.
+func (c Config) RemoteRPCURL() string {
+	return "https://" + strings.TrimSuffix(c.GenesisDomain, "/") + ":443"
 }

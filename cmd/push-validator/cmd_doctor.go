@@ -216,7 +216,7 @@ func checkP2PPeers(cfg config.Config, c *ui.ColorConfig) checkResult {
 func checkRemoteConnectivity(cfg config.Config, c *ui.ColorConfig) checkResult {
 	result := checkResult{Name: "Remote Connectivity"}
 
-	remote := "https://" + strings.TrimSuffix(cfg.GenesisDomain, "/") + ":443"
+	remote := cfg.RemoteRPCURL()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()

@@ -79,6 +79,221 @@ timeout_cmd() {
     fi
 }
 
+# Helper: Get file size in bytes (portable: macOS + Linux)
+get_file_size() {
+    local file="$1"
+    if [[ ! -f "$file" ]]; then
+        echo 0
+        return
+    fi
+    # macOS: stat -f%z, Linux: stat -c%s, fallback: wc -c
+    stat -f%z "$file" 2>/dev/null || stat -c%s "$file" 2>/dev/null || wc -c < "$file" | tr -d ' '
+}
+
+# Helper: Format byte count to human-readable (matches Go FormatBytes: 1024-based)
+format_bytes() {
+    awk "BEGIN {
+        b = $1
+        if (b >= 1073741824) printf \"%.1fGB\", b/1073741824
+        else if (b >= 1048576) printf \"%.1fMB\", b/1048576
+        else if (b >= 1024) printf \"%.1fKB\", b/1024
+        else printf \"%dB\", b
+    }"
+}
+
+# Helper: Format bytes/sec to human-readable speed (matches Go FormatSpeed)
+format_speed() {
+    awk "BEGIN {
+        s = $1
+        if (s >= 1073741824) printf \"%.1fGB/s\", s/1073741824
+        else if (s >= 1048576) printf \"%.1fMB/s\", s/1048576
+        else if (s >= 1024) printf \"%.1fKB/s\", s/1024
+        else printf \"%.0fB/s\", s
+    }"
+}
+
+# Helper: Format seconds to duration string (matches Go formatDuration)
+format_eta() {
+    local sec=$1
+    if [[ $sec -lt 0 ]]; then
+        printf "--"
+    elif [[ $sec -lt 60 ]]; then
+        printf "%ds" "$sec"
+    elif [[ $sec -lt 3600 ]]; then
+        printf "%dm%ds" "$((sec / 60))" "$((sec % 60))"
+    else
+        printf "%dh%dm" "$((sec / 3600))" "$(((sec % 3600) / 60))"
+    fi
+}
+
+# Helper: Render one frame of the progress bar (matches Go ui.ProgressBar)
+# Arguments: current_bytes total_bytes start_epoch
+render_progress_bar() {
+    local current=$1 total=$2 start_epoch=$3
+    local indent="  "
+
+    if [[ $total -le 0 ]]; then
+        printf "\r%sDownloading... %s\033[K" "$indent" "$(format_bytes "$current")"
+        return
+    fi
+
+    # Percentage
+    local pct
+    pct=$(awk "BEGIN {printf \"%.1f\", ($current / $total) * 100}")
+
+    # Speed and ETA
+    local now elapsed speed eta
+    now=$(date +%s)
+    elapsed=$((now - start_epoch))
+    if [[ $elapsed -gt 0 ]]; then
+        speed=$((current / elapsed))
+    else
+        speed=0
+    fi
+
+    if [[ $speed -gt 0 && $current -lt $total ]]; then
+        local remaining=$(( (total - current) / speed ))
+        eta=$(format_eta "$remaining")
+    elif [[ $current -ge $total ]]; then
+        eta="0s"
+    else
+        eta="--"
+    fi
+
+    # Bar width (matches Go: min(40, max(10, term_width - 56 - indent_len)))
+    local term_width=80
+    if command -v tput >/dev/null 2>&1; then
+        local tw
+        tw=$(tput cols 2>/dev/null || echo 80)
+        [[ $tw -gt 0 ]] && term_width=$tw
+    fi
+    local bar_width=$((term_width - 56 - ${#indent}))
+    [[ $bar_width -lt 10 ]] && bar_width=10
+    [[ $bar_width -gt 40 ]] && bar_width=40
+
+    # Filled/unfilled counts
+    local filled unfilled
+    filled=$(awk "BEGIN {v=int(($pct / 100) * $bar_width); if(v>$bar_width) v=$bar_width; if(v<0) v=0; print v}")
+    unfilled=$((bar_width - filled))
+
+    # Unicode detection (fallback to ASCII)
+    local fill_char unfill_char
+    if [[ "${LANG:-}${LC_ALL:-}" == *[Uu][Tt][Ff]* ]]; then
+        fill_char=$'\xe2\x96\x88'   # █ (U+2588)
+        unfill_char=$'\xe2\x96\x91' # ░ (U+2591)
+    else
+        fill_char="#"
+        unfill_char="-"
+    fi
+
+    # Build bar string
+    local bar_str=""
+    local i
+    for ((i = 0; i < filled; i++)); do bar_str+="$fill_char"; done
+    for ((i = 0; i < unfilled; i++)); do bar_str+="$unfill_char"; done
+
+    # Format values
+    local cur_fmt tot_fmt spd_fmt
+    cur_fmt=$(format_bytes "$current")
+    tot_fmt=$(format_bytes "$total")
+    spd_fmt=$(format_speed "$speed")
+
+    printf "\r%s[%s] %5s%%   %s/%s   %s   ETA %s\033[K" \
+        "$indent" "$bar_str" "$pct" "$cur_fmt" "$tot_fmt" "$spd_fmt" "$eta"
+}
+
+# Helper: Download a file with Go-style progress bar
+# Arguments: url output_file
+# Returns: 0 on success, non-zero on failure
+download_with_progress() {
+    local url="$1" output_file="$2"
+    local total_size=0 use_curl=1
+
+    if command -v curl >/dev/null 2>&1; then
+        use_curl=1
+    elif command -v wget >/dev/null 2>&1; then
+        use_curl=0
+    else
+        return 1
+    fi
+
+    # Non-TTY fallback: simple download with percentage lines at 10% intervals
+    if [[ ! -t 1 ]]; then
+        if [[ $use_curl -eq 1 ]]; then
+            # Get size for percentage reporting
+            total_size=$(curl -sLI "$url" 2>/dev/null | grep -i '^content-length:' | tail -1 | awk '{print $2}' | tr -d '\r\n')
+            total_size=${total_size:-0}
+            curl -sL -o "$output_file" "$url" &
+        else
+            total_size=$(wget --spider --server-response "$url" 2>&1 | grep -i 'content-length:' | tail -1 | awk '{print $2}' | tr -d '\r\n')
+            total_size=${total_size:-0}
+            wget -q -O "$output_file" "$url" &
+        fi
+        local dl_pid=$!
+        local last_threshold=-1
+        while kill -0 "$dl_pid" 2>/dev/null; do
+            if [[ -f "$output_file" && $total_size -gt 0 ]]; then
+                local cur
+                cur=$(get_file_size "$output_file")
+                local threshold=$(( (cur * 100 / total_size) / 10 * 10 ))
+                if [[ $threshold -gt $last_threshold ]]; then
+                    last_threshold=$threshold
+                    printf "  Downloading... %d%%\n" "$threshold"
+                fi
+            fi
+            sleep 1
+        done
+        wait "$dl_pid"
+        return $?
+    fi
+
+    # TTY mode: show progress bar
+
+    # Get Content-Length via HEAD request (follows redirects)
+    if [[ $use_curl -eq 1 ]]; then
+        total_size=$(curl -sLI "$url" 2>/dev/null | grep -i '^content-length:' | tail -1 | awk '{print $2}' | tr -d '\r\n')
+    else
+        total_size=$(wget --spider --server-response "$url" 2>&1 | grep -i 'content-length:' | tail -1 | awk '{print $2}' | tr -d '\r\n')
+    fi
+    total_size=${total_size:-0}
+
+    # Start download in background (silent)
+    local start_epoch dl_pid
+    start_epoch=$(date +%s)
+
+    if [[ $use_curl -eq 1 ]]; then
+        curl -sL -o "$output_file" "$url" &
+        dl_pid=$!
+    else
+        wget -q -O "$output_file" "$url" &
+        dl_pid=$!
+    fi
+
+    # Poll file size and render progress bar
+    local current_size=0
+    while kill -0 "$dl_pid" 2>/dev/null; do
+        if [[ -f "$output_file" ]]; then
+            current_size=$(get_file_size "$output_file")
+        fi
+        render_progress_bar "$current_size" "$total_size" "$start_epoch"
+        sleep 0.2 2>/dev/null || sleep 1
+    done
+
+    # Capture exit code
+    wait "$dl_pid"
+    local dl_exit=$?
+
+    # Final frame (100% if successful)
+    if [[ $dl_exit -eq 0 && -f "$output_file" ]]; then
+        current_size=$(get_file_size "$output_file")
+        [[ $total_size -eq 0 ]] && total_size=$current_size
+        render_progress_bar "$current_size" "$total_size" "$start_epoch"
+    fi
+    printf "\n"
+
+    return $dl_exit
+}
+
 # Helper: Check if node is running
 node_running() {
     local TO; TO=$(timeout_cmd)
@@ -321,18 +536,8 @@ install_go() {
     trap "rm -rf '$temp_dir'" EXIT
 
     step "Downloading Go ${go_version} for ${os}/${arch}"
-    if command -v curl >/dev/null 2>&1; then
-        curl -L --progress-bar -o "$temp_dir/go.tar.gz" "$download_url" || {
-            err "Failed to download Go"
-            return 1
-        }
-    elif command -v wget >/dev/null 2>&1; then
-        wget --show-progress -O "$temp_dir/go.tar.gz" "$download_url" || {
-            err "Failed to download Go"
-            return 1
-        }
-    else
-        err "Neither curl nor wget found. Cannot download Go."
+    if ! download_with_progress "$download_url" "$temp_dir/go.tar.gz"; then
+        err "Failed to download Go"
         return 1
     fi
 
@@ -430,21 +635,9 @@ download_pchaind() {
     (
         trap "rm -rf '$temp_dir'" EXIT
 
-        # Download tarball with progress and ETA
-        if command -v curl >/dev/null 2>&1; then
-            # Use default progress meter which shows speed and ETA
-            if ! curl -L -o "$temp_dir/$filename" "$download_url"; then
-                verbose "curl download failed"
-                exit 1
-            fi
-        elif command -v wget >/dev/null 2>&1; then
-            # wget --show-progress shows ETA by default
-            if ! wget --show-progress -q -O "$temp_dir/$filename" "$download_url"; then
-                verbose "wget download failed"
-                exit 1
-            fi
-        else
-            verbose "Neither curl nor wget available"
+        # Download tarball with Go-style progress bar
+        if ! download_with_progress "$download_url" "$temp_dir/$filename"; then
+            verbose "Download failed"
             exit 1
         fi
 
@@ -587,21 +780,9 @@ download_push_validator() {
     (
         trap "rm -rf '$temp_dir'" EXIT
 
-        # Download tarball with progress and ETA
-        if command -v curl >/dev/null 2>&1; then
-            # Use default progress meter which shows speed and ETA
-            if ! curl -L -o "$temp_dir/$filename" "$download_url"; then
-                verbose "curl download failed"
-                exit 1
-            fi
-        elif command -v wget >/dev/null 2>&1; then
-            # wget --show-progress shows ETA by default
-            if ! wget --show-progress -q -O "$temp_dir/$filename" "$download_url"; then
-                verbose "wget download failed"
-                exit 1
-            fi
-        else
-            verbose "Neither curl nor wget available"
+        # Download tarball with Go-style progress bar
+        if ! download_with_progress "$download_url" "$temp_dir/$filename"; then
+            verbose "Download failed"
             exit 1
         fi
 

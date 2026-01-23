@@ -38,7 +38,7 @@ func handleWithdrawRewards(cfg config.Config) {
 	if local == "" {
 		local = "http://127.0.0.1:26657"
 	}
-	remoteHTTP := "https://" + strings.TrimSuffix(cfg.GenesisDomain, "/") + ":443"
+	remoteHTTP := cfg.RemoteRPCURL()
 	cliLocal := node.New(local)
 	cliRemote := node.New(remoteHTTP)
 
@@ -200,10 +200,15 @@ func handleWithdrawRewards(cfg config.Config) {
 	// Try to auto-derive the key name from the validator's address
 	if myVal.Address != "" {
 		// Convert validator address to account address
-		accountAddr, convErr := convertValidatorToAccountAddress(myVal.Address)
+		addrCtx, addrCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		accountAddr, convErr := convertValidatorToAccountAddress(addrCtx, myVal.Address)
+		addrCancel()
 		if convErr == nil {
 			// Try to find the key in the keyring
-			if foundKey, findErr := findKeyNameByAddress(cfg, accountAddr); findErr == nil {
+			keyCtx, keyCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			foundKey, findErr := findKeyNameByAddress(keyCtx, cfg, accountAddr)
+			keyCancel()
+			if findErr == nil {
 				keyName = foundKey
 				if flagOutput != "json" {
 					fmt.Println()
@@ -257,7 +262,9 @@ func handleWithdrawRewards(cfg config.Config) {
 	}
 
 	// Convert validator address to account address for balance check
-	accountAddr, addrErr := convertValidatorToAccountAddress(myVal.Address)
+	balAddrCtx, balAddrCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	accountAddr, addrErr := convertValidatorToAccountAddress(balAddrCtx, myVal.Address)
+	balAddrCancel()
 	if addrErr != nil {
 		if flagOutput == "json" {
 			getPrinter().JSON(map[string]any{"ok": false, "error": "failed to derive account address"})
@@ -270,7 +277,9 @@ func handleWithdrawRewards(cfg config.Config) {
 	}
 
 	// Get EVM address for display
-	evmAddr, evmErr := getEVMAddress(accountAddr)
+	evmCtx2, evmCancel2 := context.WithTimeout(context.Background(), 10*time.Second)
+	evmAddr, evmErr := getEVMAddress(evmCtx2, accountAddr)
+	evmCancel2()
 	if evmErr != nil {
 		evmAddr = "" // Not critical, we can proceed without EVM address
 	}

@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -32,7 +31,7 @@ func init() {
 				syncRPC = cfg.RPCLocal
 			}
 			if syncRemote == "" {
-				syncRemote = "https://" + strings.TrimSuffix(cfg.GenesisDomain, "/") + ":443"
+				syncRemote = cfg.RemoteRPCURL()
 			}
 			sup := process.New(cfg.HomeDir)
 			if syncStuckTimeout <= 0 {

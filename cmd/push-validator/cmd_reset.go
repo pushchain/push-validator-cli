@@ -18,6 +18,24 @@ import (
 // handleReset stops the node (best-effort), clears chain data while
 // preserving the address book, and restarts the node. It emits JSON or text depending on --output.
 func handleReset(cfg config.Config, sup process.Supervisor) error {
+	p := getPrinter()
+
+	// Require confirmation for destructive operation
+	if flagOutput != "json" && !flagYes {
+		if flagNonInteractive {
+			return fmt.Errorf("reset requires confirmation: use --yes to confirm in non-interactive mode")
+		}
+		fmt.Println(p.Colors.Warning("⚠️  This will reset all chain data (address book will be kept)"))
+		fmt.Println()
+		fmt.Print(p.Colors.Apply(p.Colors.Theme.Prompt, "Confirm reset? (y/N): "))
+		reader := bufio.NewReader(os.Stdin)
+		response, _ := reader.ReadString('\n')
+		if strings.ToLower(strings.TrimSpace(response)) != "y" {
+			fmt.Println(p.Colors.Info("Reset cancelled"))
+			return nil
+		}
+	}
+
 	wasRunning := sup.IsRunning()
 
 	// Stop node first and verify it stopped
@@ -141,6 +159,9 @@ func handleFullReset(cfg config.Config, sup process.Supervisor) error {
 
 		// Require explicit confirmation
 		if !flagYes {
+			if flagNonInteractive {
+				return fmt.Errorf("full-reset requires confirmation: use --yes to confirm in non-interactive mode")
+			}
 			fmt.Print(p.Colors.Apply(p.Colors.Theme.Prompt, "Type 'yes' to confirm full reset: "))
 			reader := bufio.NewReader(os.Stdin)
 			response, _ := reader.ReadString('\n')

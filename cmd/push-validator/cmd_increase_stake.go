@@ -67,7 +67,9 @@ func handleIncreaseStake(cfg config.Config) {
 	p.KeyValueLine("Address", myValInfo.Address, "dim")
 
 	// Get and display EVM address
-	evmAddr, evmErr := getEVMAddress(myValInfo.Address)
+	evmCtx, evmCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	evmAddr, evmErr := getEVMAddress(evmCtx, myValInfo.Address)
+	evmCancel()
 	if evmErr == nil {
 		p.KeyValueLine("EVM Address", evmAddr, "dim")
 	}
@@ -78,7 +80,9 @@ func handleIncreaseStake(cfg config.Config) {
 	fmt.Println()
 
 	// Convert validator operator address to account address
-	accountAddr, convErr := convertValidatorToAccountAddress(myValInfo.Address)
+	convCtx, convCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	accountAddr, convErr := convertValidatorToAccountAddress(convCtx, myValInfo.Address)
+	convCancel()
 	if convErr != nil {
 		if flagOutput == "json" {
 			getPrinter().JSON(map[string]any{"ok": false, "error": convErr.Error()})
@@ -195,10 +199,15 @@ func handleIncreaseStake(cfg config.Config) {
 	if myValInfo.Address != "" {
 		// We already have accountAddr from the balance check above, but need to recalculate
 		// in case that logic changes in the future
-		accountAddr, convErr := convertValidatorToAccountAddress(myValInfo.Address)
+		addrCtx, addrCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		accountAddr, convErr := convertValidatorToAccountAddress(addrCtx, myValInfo.Address)
+		addrCancel()
 		if convErr == nil {
 			// Try to find the key in the keyring
-			if foundKey, findErr := findKeyNameByAddress(cfg, accountAddr); findErr == nil {
+			keyCtx, keyCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			foundKey, findErr := findKeyNameByAddress(keyCtx, cfg, accountAddr)
+			keyCancel()
+			if findErr == nil {
 				keyName = foundKey
 				if flagOutput != "json" {
 					fmt.Println()

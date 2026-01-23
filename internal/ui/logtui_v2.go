@@ -14,6 +14,14 @@ import (
 	"golang.org/x/term"
 )
 
+// LogUIOptions configures the TUI log viewer
+type LogUIOptions struct {
+	LogPath    string // Path to pchaind.log
+	BgKey      byte   // Key to background (default: 'b')
+	ShowFooter bool   // Enable footer (default: true)
+	NoColor    bool   // Respect --no-color
+}
+
 // RunLogUIV2 shows logs with sticky footer at bottom
 func RunLogUIV2(ctx context.Context, opts LogUIOptions) error {
 	// 1. Check TTY

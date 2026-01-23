@@ -78,8 +78,6 @@ func computeStatus(cfg config.Config, sup process.Supervisor) statusResult {
     res.Running = sup.IsRunning()
     if pid, ok := sup.PID(); ok {
         res.PID = pid
-        // Try to get system metrics for this process
-        getProcessMetrics(res.PID, &res)
     }
 
     rpc := cfg.RPCLocal
@@ -149,7 +147,7 @@ func computeStatus(cfg config.Config, sup process.Supervisor) statusResult {
             }
 
             // Enrich with remote height and peers (best-effort, with strict timeout)
-            remote := "https://" + strings.TrimSuffix(cfg.GenesisDomain, "/") + ":443"
+            remote := cfg.RemoteRPCURL()
             col := metrics.NewWithoutCPU()
             ctx2, cancel2 := context.WithTimeout(context.Background(), 1000*time.Millisecond)
             snapChan := make(chan metrics.Snapshot, 1)
@@ -210,15 +208,6 @@ func computeStatus(cfg config.Config, sup process.Supervisor) statusResult {
     return res
 }
 
-// getProcessMetrics attempts to fetch memory and disk metrics for a process
-func getProcessMetrics(pid int, res *statusResult) {
-    // This is a best-effort attempt - we'll try to get these metrics if possible
-    // For now, we set defaults. In production, you'd use process libraries or proc filesystem
-    // Try using `ps` command to get memory usage
-    // Example: ps -p <pid> -o %mem= gives percentage of memory
-    // This is simplified for now to avoid external dependencies
-}
-
 // getBinaryVersion fetches the binary version string from pchaind
 func getBinaryVersion(cfg config.Config) string {
     ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -247,7 +236,7 @@ func getBinaryVersion(cfg config.Config) string {
 
 // printStatusText prints a human-friendly status summary matching the dashboard layout.
 func printStatusText(result statusResult) {
-    c := ui.NewColorConfig()
+    c := ui.NewColorConfigFromGlobal()
 
     // Build icon/status strings
     nodeIcon := c.StatusIcon("stopped")
@@ -580,22 +569,6 @@ func printStatusText(result statusResult) {
     }
 }
 
-// formatWithCommas adds comma separators to large numbers
-func formatWithCommas(n int64) string {
-    if n < 1000 {
-        return fmt.Sprintf("%d", n)
-    }
-    s := fmt.Sprintf("%d", n)
-    var result string
-    for i, c := range s {
-        if i > 0 && (len(s)-i)%3 == 0 {
-            result += ","
-        }
-        result += string(c)
-    }
-    return result
-}
-
 // formatTimestamp converts RFC3339 timestamp to "Jan 02, 03:04 PM MST" format
 func formatTimestamp(rfcTime string) string {
     if rfcTime == "" {
@@ -676,16 +649,23 @@ func renderSyncProgressDashboard(local, remote int64, isCatchingUp bool) string 
     greyBar := lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render(strings.Repeat("░", width-filled))
     bar := greenBar + greyBar
 
-    // Status label
+    // Status label (respect --no-emoji flag)
+    globalCfg := ui.GetGlobal()
     icon := "📊 Syncing"
     if !isCatchingUp {
         icon = "📊 In Sync"
     }
+    if globalCfg.NoEmoji {
+        icon = "[SYNC] Syncing"
+        if !isCatchingUp {
+            icon = "[SYNC] In Sync"
+        }
+    }
 
     result := fmt.Sprintf("%s [%s] %.2f%% | %s/%s blocks",
         icon, bar, percent,
-        formatWithCommas(local),
-        formatWithCommas(remote))
+        ui.FormatNumber(local),
+        ui.FormatNumber(remote))
 
     // Add ETA if syncing
     if isCatchingUp && remote > local {

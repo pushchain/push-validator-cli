@@ -1,9 +1,5 @@
 package exitcodes
 
-import (
-	"fmt"
-	"os"
-)
 
 // Standard exit codes for push-validator-manager
 const (
@@ -36,22 +32,6 @@ const (
 	ValidationError = 6
 )
 
-// Exit terminates the program with the given code
-func Exit(code int) {
-	os.Exit(code)
-}
-
-// ExitWithError prints error message to stderr and exits with the given code
-func ExitWithError(code int, msg string) {
-	fmt.Fprintln(os.Stderr, msg)
-	os.Exit(code)
-}
-
-// ExitWithErrorf prints formatted error message to stderr and exits
-func ExitWithErrorf(code int, format string, args ...interface{}) {
-	fmt.Fprintf(os.Stderr, format+"\n", args...)
-	os.Exit(code)
-}
 
 // CodeForError returns the appropriate exit code for an error.
 // Unwraps ErrorWithCode for explicit codes, otherwise returns GeneralError.

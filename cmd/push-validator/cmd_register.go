@@ -18,6 +18,23 @@ import (
 	"golang.org/x/term"
 )
 
+const (
+	// registrationRequiredBalance is the minimum balance needed to register (1.6 PC in wei)
+	registrationRequiredBalance = "1600000000000000000"
+
+	// registrationMinStake is the minimum self-delegation amount (1.5 PC in wei)
+	registrationMinStake = "1500000000000000000"
+
+	// registrationFeeReserve is the amount reserved for transaction fees (0.1 PC in wei)
+	registrationFeeReserve = "100000000000000000"
+
+	// defaultCommissionRate is the default validator commission rate (10%)
+	defaultCommissionRate = "0.10"
+
+	// defaultMinSelfDelegation is the default minimum self-delegation value
+	defaultMinSelfDelegation = "1"
+)
+
 var flagRegisterCheckOnly bool
 
 // handleRegisterValidator is a compatibility wrapper that pulls
@@ -27,7 +44,7 @@ func handleRegisterValidator(cfg config.Config) {
 	// Get defaults from env or use hardcoded fallbacks
 	defaultMoniker := getenvDefault("MONIKER", "push-validator")
 	defaultKeyName := getenvDefault("KEY_NAME", "validator-key")
-	defaultAmount := getenvDefault("STAKE_AMOUNT", "1500000000000000000")
+	defaultAmount := getenvDefault("STAKE_AMOUNT", registrationMinStake)
 
 	moniker := defaultMoniker
 	keyName := defaultKeyName
@@ -195,13 +212,13 @@ func handleRegisterValidator(cfg config.Config) {
 			input = strings.TrimSpace(input)
 
 			if input == "" {
-				commissionRate = "0.10" // Default 10%
+				commissionRate = defaultCommissionRate // Default 10%
 			} else {
 				// Parse and validate
 				rate, err := strconv.ParseFloat(input, 64)
 				if err != nil || rate < 1 || rate > 100 {
 					fmt.Println(p.Colors.Error("⚠ Invalid commission rate. Using default 10%"))
-					commissionRate = "0.10"
+					commissionRate = defaultCommissionRate
 				} else {
 					// Convert percentage to decimal (e.g., 15 -> 0.15)
 					commissionRate = fmt.Sprintf("%.2f", rate/100)
@@ -209,7 +226,7 @@ func handleRegisterValidator(cfg config.Config) {
 			}
 			fmt.Println()
 		} else {
-			commissionRate = getenvDefault("COMMISSION_RATE", "0.10")
+			commissionRate = getenvDefault("COMMISSION_RATE", defaultCommissionRate)
 		}
 
 		// Interactive mode - let user choose stake amount
@@ -217,7 +234,7 @@ func handleRegisterValidator(cfg config.Config) {
 		runRegisterValidator(cfg, moniker, keyName, "", commissionRate, importMnemonic)
 	} else {
 		// JSON mode or env vars set - use default/env amount
-		commissionRate := getenvDefault("COMMISSION_RATE", "0.10")
+		commissionRate := getenvDefault("COMMISSION_RATE", defaultCommissionRate)
 		runRegisterValidator(cfg, moniker, keyName, defaultAmount, commissionRate, "")
 	}
 }
@@ -313,7 +330,7 @@ func runRegisterValidator(cfg config.Config, moniker, keyName, amount, commissio
 	if local == "" {
 		local = "http://127.0.0.1:26657"
 	}
-	remoteHTTP := "https://" + strings.TrimSuffix(cfg.GenesisDomain, "/") + ":443"
+	remoteHTTP := cfg.RemoteRPCURL()
 	cliLocal := node.New(local)
 	cliRemote := node.New(remoteHTTP)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -405,9 +422,6 @@ func runRegisterValidator(cfg config.Config, moniker, keyName, amount, commissio
 		p.KeyValueLine("Cosmos Address", keyInfo.Address, "dim")
 		fmt.Println()
 	}
-	const requiredBalance = "1600000000000000000"
-	const minStake = "1500000000000000000"     // 1.5 PC in wei
-	const feeReserve = "100000000000000000"    // 0.1 PC in wei for gas fees
 	maxRetries := 10
 	var finalBalance string
 
@@ -424,7 +438,7 @@ func runRegisterValidator(cfg config.Config, moniker, keyName, amount, commissio
 		balInt := new(big.Int)
 		balInt.SetString(bal, 10)
 		reqInt := new(big.Int)
-		reqInt.SetString(requiredBalance, 10)
+		reqInt.SetString(registrationRequiredBalance, 10)
 		if balInt.Cmp(reqInt) >= 0 {
 			fmt.Println(p.Colors.Success("✅ Sufficient balance"))
 			finalBalance = bal
@@ -462,11 +476,11 @@ func runRegisterValidator(cfg config.Config, moniker, keyName, amount, commissio
 		balInt := new(big.Int)
 		balInt.SetString(finalBalance, 10)
 		feeInt := new(big.Int)
-		feeInt.SetString(feeReserve, 10)
+		feeInt.SetString(registrationFeeReserve, 10)
 		maxStakeable := new(big.Int).Sub(balInt, feeInt)
 
 		minStakeInt := new(big.Int)
-		minStakeInt.SetString(minStake, 10)
+		minStakeInt.SetString(registrationMinStake, 10)
 
 		// Display balance and staking range
 		fmt.Println()
@@ -526,12 +540,12 @@ func runRegisterValidator(cfg config.Config, moniker, keyName, amount, commissio
 			break
 		}
 	} else if stake == "" {
-		stake = minStake
+		stake = registrationMinStake
 	}
 	// Create fresh context for registration transaction (independent of earlier operations)
 	regCtx, regCancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer regCancel()
-	txHash, err := v.Register(regCtx, validator.RegisterArgs{Moniker: moniker, Amount: stake, KeyName: keyName, CommissionRate: commissionRate, MinSelfDelegation: "1"})
+	txHash, err := v.Register(regCtx, validator.RegisterArgs{Moniker: moniker, Amount: stake, KeyName: keyName, CommissionRate: commissionRate, MinSelfDelegation: defaultMinSelfDelegation})
 	if err != nil {
 		errMsg := err.Error()
 		if flagOutput == "json" {

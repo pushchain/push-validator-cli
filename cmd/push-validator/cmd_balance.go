@@ -35,7 +35,9 @@ func handleBalance(cfg config.Config, args []string) error {
 
     // Convert hex address (0x...) to bech32 if needed
     if strings.HasPrefix(addr, "0x") || strings.HasPrefix(addr, "0X") {
-        bech32Addr, convErr := hexToBech32Address(addr)
+        convCtx, convCancel := context.WithTimeout(context.Background(), 10*time.Second)
+        bech32Addr, convErr := hexToBech32Address(convCtx, addr)
+        convCancel()
         if convErr != nil {
             if flagOutput == "json" { getPrinter().JSON(map[string]any{"ok": false, "error": convErr.Error(), "address": addr}) } else { getPrinter().Error(fmt.Sprintf("address conversion error: %v", convErr)) }
             return convErr

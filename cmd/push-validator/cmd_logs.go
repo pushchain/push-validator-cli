@@ -45,45 +45,38 @@ func handleLogs(sup process.Supervisor) error {
 			}
 		}
 	}
-	if interactive {
-		var (
-			origIn  = os.Stdin
-			origOut = os.Stdout
-		)
-		if tty != nil {
-			os.Stdin = tty
-			os.Stdout = tty
-		}
+	// Setup context for signal handling
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Handle Ctrl+C
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-sigs
+		cancel()
+	}()
+
+	var (
+		origIn  = os.Stdin
+		origOut = os.Stdout
+	)
+	if tty != nil {
+		os.Stdin = tty
+		os.Stdout = tty
 		defer func() {
-			if tty != nil {
-				_ = tty.Close()
-			}
+			_ = tty.Close()
 			os.Stdin = origIn
 			os.Stdout = origOut
 		}()
-		// Pass context.Background() - RunLogUIV2 handles Ctrl+C via raw terminal input
-		return ui.RunLogUIV2(context.Background(), ui.LogUIOptions{
-			LogPath:    lp,
-			BgKey:      'b',
-			ShowFooter: true,
-			NoColor:    flagNoColor,
-		})
-	}
-	if tty != nil {
-		_ = tty.Close()
 	}
 
-	getPrinter().Info(fmt.Sprintf("Tailing %s (Ctrl+C to stop)", lp))
-	stop := make(chan struct{})
-	sigs := make(chan os.Signal, 1)
-	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
-	go func() { <-sigs; close(stop) }()
-	if err := process.TailFollow(lp, os.Stdout, stop); err != nil {
-		fmt.Printf("tail error: %v\n", err)
-		return err
-	}
-	// Print exit message after Ctrl+C
-	fmt.Println()
-	getPrinter().Success("Stopped tailing logs")
-	return nil
+	// RunLogUIV2 handles both interactive (with TUI) and non-interactive (tail -F) modes
+	// It automatically detects TTY and falls back to simple tail when needed
+	return ui.RunLogUIV2(ctx, ui.LogUIOptions{
+		LogPath:    lp,
+		BgKey:      'b',
+		ShowFooter: interactive,
+		NoColor:    flagNoColor,
+	})
 }

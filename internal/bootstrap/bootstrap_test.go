@@ -37,6 +37,14 @@ func (fakeSnapshot) Download(ctx context.Context, opts snapshot.Options) error {
 	return os.WriteFile(filepath.Join(dataDir, ".snapshot_extracted"), []byte("test"), 0o644)
 }
 
+func (fakeSnapshot) Extract(ctx context.Context, opts snapshot.ExtractOptions) error {
+	return nil
+}
+
+func (fakeSnapshot) IsCacheValid(ctx context.Context, opts snapshot.Options) (bool, error) {
+	return true, nil
+}
+
 func TestBootstrap_Init_FullFlow(t *testing.T) {
 	// Skip if sandbox disallows binding
 	if ln, err := net.Listen("tcp", "127.0.0.1:0"); err != nil {

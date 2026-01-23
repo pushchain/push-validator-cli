@@ -32,11 +32,3 @@ func NewColorConfigFromGlobal() *ColorConfig {
 	c.EmojiEnabled = c.EmojiEnabled && !cfg.NoEmoji
 	return c
 }
-
-// NewPrinterFromGlobal creates a Printer using global settings
-func NewPrinterFromGlobal(format string) Printer {
-	return Printer{
-		format: format,
-		Colors: NewColorConfigFromGlobal(),
-	}
-}

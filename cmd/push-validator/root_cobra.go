@@ -1,32 +1,20 @@
 package main
 
 import (
-	"bufio"
-	"context"
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
-	"strings"
-	"time"
+	"sync"
 
 	"github.com/spf13/cobra"
-	"golang.org/x/term"
 	"gopkg.in/yaml.v3"
 
-	"github.com/pushchain/push-validator-cli/internal/admin"
-	"github.com/pushchain/push-validator-cli/internal/bootstrap"
 	"github.com/pushchain/push-validator-cli/internal/config"
 	"github.com/pushchain/push-validator-cli/internal/cosmovisor"
-	"github.com/pushchain/push-validator-cli/internal/dashboard"
 	"github.com/pushchain/push-validator-cli/internal/exitcodes"
-	"github.com/pushchain/push-validator-cli/internal/metrics"
 	"github.com/pushchain/push-validator-cli/internal/process"
-	"github.com/pushchain/push-validator-cli/internal/snapshot"
-	syncmon "github.com/pushchain/push-validator-cli/internal/sync"
 	ui "github.com/pushchain/push-validator-cli/internal/ui"
 	"github.com/pushchain/push-validator-cli/internal/update"
-	"github.com/pushchain/push-validator-cli/internal/validator"
 )
 
 // Version information - set via -ldflags during build
@@ -40,30 +28,11 @@ var (
 // applied to a loaded config in loadCfg(). Subcommands implement the
 // actual operations (init, start/stop, sync, status, etc.).
 // updateCheckResult stores the result of background update check
-var updateCheckResult *update.CheckResult
+var (
+	updateCheckResult   *update.CheckResult
+	updateCheckMu       sync.Mutex
+)
 
-// shouldSkipUpdateCheck returns true for commands where update notifications are disruptive
-func shouldSkipUpdateCheck(cmd *cobra.Command) bool {
-	cmdName := cmd.Name()
-	// Skip for update, help, version commands
-	if cmdName == "update" || cmdName == "help" || cmdName == "version" {
-		return true
-	}
-	// Skip for installation-related commands (called by install.sh)
-	if cmdName == "init" || cmdName == "snapshot" || cmdName == "chain" ||
-		cmdName == "start" || cmdName == "sync" {
-		return true
-	}
-	// Skip for subcommands of chain (e.g., "chain install")
-	if cmd.Parent() != nil && cmd.Parent().Name() == "chain" {
-		return true
-	}
-	// Skip for subcommands of snapshot (e.g., "snapshot download")
-	if cmd.Parent() != nil && cmd.Parent().Name() == "snapshot" {
-		return true
-	}
-	return false
-}
 
 var rootCmd = &cobra.Command{
 	Use:   "push-validator",
@@ -81,6 +50,11 @@ var rootCmd = &cobra.Command{
 			Debug:          flagDebug,
 		})
 
+		// Set NO_COLOR env so lipgloss and other libraries respect the flag
+		if flagNoColor {
+			os.Setenv("NO_COLOR", "1")
+		}
+
 		// Start background update check (non-blocking)
 		// Skip for installation-related commands where notifications are disruptive
 		if !shouldSkipUpdateCheck(cmd) {
@@ -90,8 +64,11 @@ var rootCmd = &cobra.Command{
 	PersistentPostRun: func(cmd *cobra.Command, args []string) {
 		// Show update notification if available (after command completes)
 		// Skip for installation-related commands where notifications are disruptive
-		if !shouldSkipUpdateCheck(cmd) && updateCheckResult != nil && updateCheckResult.UpdateAvailable {
-			showUpdateNotification(updateCheckResult.LatestVersion)
+		updateCheckMu.Lock()
+		result := updateCheckResult
+		updateCheckMu.Unlock()
+		if !shouldSkipUpdateCheck(cmd) && result != nil && result.UpdateAvailable {
+			showUpdateNotification(result.LatestVersion)
 		}
 	},
 }
@@ -127,7 +104,13 @@ func init() {
 	rootCmd.PersistentFlags().BoolVar(&flagNonInteractive, "non-interactive", false, "Fail instead of prompting")
 
 	// Replace root help to present grouped, example-rich output.
+	// Only apply custom help to the root command; subcommands use cobra's default help.
 	rootCmd.SetHelpFunc(func(cmd *cobra.Command, args []string) {
+		if cmd != rootCmd {
+			// For subcommands, print cobra's default usage (includes flags and descriptions)
+			fmt.Fprintln(os.Stdout, cmd.UsageString())
+			return
+		}
 		// Help runs before PersistentPreRun, so manually configure colors
 		c := ui.NewColorConfig()
 		c.Enabled = c.Enabled && !flagNoColor
@@ -253,312 +236,6 @@ func init() {
 	// dashboard - interactive TUI for monitoring
 	rootCmd.AddCommand(createDashboardCmd())
 
-	// init (Cobra flags)
-	var initMoniker, initChainID, initSnapshotURL string
-	var initSkipSnapshot bool
-	initCmd := &cobra.Command{
-		Use:    "init",
-		Short:  "Initialize local node home",
-		Hidden: true,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg := loadCfg()
-			p := getPrinter()
-			if initMoniker == "" {
-				initMoniker = getenvDefault("MONIKER", "push-validator")
-			}
-			if initChainID == "" {
-				initChainID = cfg.ChainID
-			}
-			if initSnapshotURL == "" {
-				initSnapshotURL = cfg.SnapshotURL
-			}
-
-			// Create progress callback that shows init steps
-			progressCallback := func(msg string) {
-				if flagOutput != "json" {
-					fmt.Printf("  → %s\n", msg)
-				}
-			}
-
-			svc := bootstrap.New()
-			if err := svc.Init(cmd.Context(), bootstrap.Options{
-				HomeDir:          cfg.HomeDir,
-				ChainID:          initChainID,
-				Moniker:          initMoniker,
-				GenesisDomain:    cfg.GenesisDomain,
-				BinPath:          findPchaind(),
-				SnapshotURL:      initSnapshotURL,
-				Progress:         progressCallback,
-				SnapshotProgress: createSnapshotProgressCallback(flagOutput),
-				SkipSnapshot:     initSkipSnapshot,
-			}); err != nil {
-				ui.PrintError(ui.ErrorMessage{
-					Problem: "Initialization failed",
-					Causes: []string{
-						"Network issue fetching genesis or status",
-						"Incorrect --genesis-domain or RPC unreachable",
-						"pchaind binary missing or not executable",
-					},
-					Actions: []string{
-						"Verify connectivity: curl https://<genesis-domain>/status",
-						"Set --genesis-domain to a working RPC host",
-						"Ensure pchaind is installed and in PATH or pass --bin",
-					},
-					Hints: []string{"push-validator validators --output json"},
-				})
-				return err
-			}
-			// Only show success message when NOT in scripted mode (--skip-snapshot)
-			// install.sh calls with --skip-snapshot and handles its own "Node initialized" message
-			if flagOutput != "json" && !initSkipSnapshot {
-				p.Success("Initialization complete")
-			}
-			return nil
-		},
-	}
-	initCmd.Flags().StringVar(&initMoniker, "moniker", "", "Validator moniker")
-	initCmd.Flags().StringVar(&initChainID, "chain-id", "", "Chain ID")
-	initCmd.Flags().StringVar(&initSnapshotURL, "snapshot-url", "", "Snapshot download base URL")
-	initCmd.Flags().BoolVar(&initSkipSnapshot, "skip-snapshot", false, "Skip snapshot download (for separate step)")
-	rootCmd.AddCommand(initCmd)
-
-	// start (Cobra flags)
-	var startBin string
-	var startNoPrompt bool
-	var startNoCosmovisor bool
-	startCmd := &cobra.Command{
-		Use:   "start",
-		Short: "Start node",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg := loadCfg()
-			p := getPrinter()
-
-			// Check if initialization is needed (genesis.json or validator keys missing)
-			genesisPath := filepath.Join(cfg.HomeDir, "config", "genesis.json")
-			privValKeyPath := filepath.Join(cfg.HomeDir, "config", "priv_validator_key.json")
-			nodeKeyPath := filepath.Join(cfg.HomeDir, "config", "node_key.json")
-
-			// Initialize if genesis OR validator keys are missing
-			// (needed for first-time setup and post-full-reset scenarios)
-			needsInit := false
-			if _, err := os.Stat(genesisPath); os.IsNotExist(err) {
-				needsInit = true
-			}
-			if _, err := os.Stat(privValKeyPath); os.IsNotExist(err) {
-				needsInit = true
-			}
-			if _, err := os.Stat(nodeKeyPath); os.IsNotExist(err) {
-				needsInit = true
-			}
-
-			if needsInit {
-				// Auto-initialize on first start
-				if flagOutput != "json" {
-					p.Info("Initializing node (first time)...")
-					fmt.Println()
-				}
-
-				// Create progress callback that shows init steps
-				progressCallback := func(msg string) {
-					if flagOutput != "json" {
-						fmt.Printf("  → %s\n", msg)
-					}
-				}
-
-				svc := bootstrap.New()
-				if err := svc.Init(cmd.Context(), bootstrap.Options{
-					HomeDir:          cfg.HomeDir,
-					ChainID:          cfg.ChainID,
-					Moniker:          getenvDefault("MONIKER", "push-validator"),
-					GenesisDomain:    cfg.GenesisDomain,
-					BinPath:          findPchaind(),
-					SnapshotURL:      cfg.SnapshotURL,
-					Progress:         progressCallback,
-					SnapshotProgress: createSnapshotProgressCallback(flagOutput),
-				}); err != nil {
-					ui.PrintError(ui.ErrorMessage{
-						Problem: "Initialization failed",
-						Causes: []string{
-							"Network issue fetching genesis or status",
-							"Incorrect genesis domain configuration",
-							"pchaind binary missing or not executable",
-						},
-						Actions: []string{
-							"Verify connectivity: curl https://<genesis-domain>/status",
-							"Check genesis domain in config",
-							"Ensure pchaind is installed and in PATH",
-						},
-					})
-					return err
-				}
-
-				if flagOutput != "json" {
-					fmt.Println()
-					p.Success("Initialization complete")
-				}
-			}
-
-			// Determine which supervisor to use (Cosmovisor or direct pchaind)
-			var sup process.Supervisor
-			useCosmovisor := false
-
-			if !startNoCosmovisor {
-				detection := cosmovisor.Detect(cfg.HomeDir)
-				if detection.Available {
-					useCosmovisor = true
-					sup = process.NewCosmovisor(cfg.HomeDir)
-					if flagOutput != "json" && !detection.SetupComplete {
-						p.Info("Initializing Cosmovisor...")
-					}
-				} else {
-					sup = process.New(cfg.HomeDir)
-				}
-			} else {
-				sup = process.New(cfg.HomeDir)
-			}
-
-			// Check if node is already running
-			isAlreadyRunning := sup.IsRunning()
-
-			if flagOutput != "json" {
-				if isAlreadyRunning {
-					if pid, ok := sup.PID(); ok {
-						p.Success(fmt.Sprintf("Node is running (PID: %d)", pid))
-					} else {
-						p.Success("Node is running")
-					}
-				} else {
-					if useCosmovisor {
-						fmt.Println("→ Starting node with Cosmovisor...")
-					} else {
-						fmt.Println("→ Starting node...")
-					}
-				}
-			}
-
-			// Continue with normal start
-			if startBin != "" {
-				_ = os.Setenv("PCHAIND", startBin)
-			}
-			_, err := sup.Start(process.StartOpts{HomeDir: cfg.HomeDir, Moniker: os.Getenv("MONIKER"), BinPath: findPchaind()})
-			if err != nil {
-				ui.PrintError(ui.ErrorMessage{
-					Problem: "Failed to start node",
-					Causes: []string{
-						"Invalid home directory or permissions",
-						"pchaind not found or incompatible",
-						"Port already in use",
-					},
-					Actions: []string{
-						"Check: ls <home>/config/genesis.json",
-						"Confirm pchaind version matches network",
-						"Verify ports 26656/26657 are available",
-					},
-				})
-				return err
-			}
-			if flagOutput == "json" {
-				p.JSON(map[string]any{"ok": true, "action": "start", "already_running": isAlreadyRunning, "cosmovisor": useCosmovisor})
-			} else {
-				if !isAlreadyRunning {
-					if useCosmovisor {
-						p.Success("Node started with Cosmovisor")
-					} else {
-						p.Success("Node started successfully")
-					}
-				}
-
-				// Check validator status and show appropriate next steps (skip if --no-prompt)
-				if !startNoPrompt {
-					fmt.Println()
-					if !handlePostStartFlow(cfg, &p) {
-						// If post-start flow fails, just continue (node is already started)
-						return nil
-					}
-				}
-			}
-			return nil
-		},
-	}
-	startCmd.Flags().StringVar(&startBin, "bin", "", "Path to pchaind binary")
-	startCmd.Flags().BoolVar(&startNoPrompt, "no-prompt", false, "Skip post-start prompts (for use in scripts)")
-	startCmd.Flags().BoolVar(&startNoCosmovisor, "no-cosmovisor", false, "Use direct pchaind instead of Cosmovisor")
-	rootCmd.AddCommand(startCmd)
-
-	rootCmd.AddCommand(&cobra.Command{Use: "stop", Short: "Stop node", RunE: func(cmd *cobra.Command, args []string) error {
-		cfg := loadCfg()
-		// Try to stop Cosmovisor first (it will also handle direct pchaind if running)
-		cosmoSup := process.NewCosmovisor(cfg.HomeDir)
-		if cosmoSup.IsRunning() {
-			return handleStop(cosmoSup)
-		}
-		// Fall back to direct pchaind supervisor
-		return handleStop(process.New(cfg.HomeDir))
-	}})
-
-	var restartBin string
-	var restartNoCosmovisor bool
-	restartCmd := &cobra.Command{Use: "restart", Short: "Restart node", RunE: func(cmd *cobra.Command, args []string) error {
-		cfg := loadCfg()
-		p := getPrinter()
-		if restartBin != "" {
-			_ = os.Setenv("PCHAIND", restartBin)
-		}
-
-		// Determine which supervisor to use
-		var sup process.Supervisor
-		useCosmovisor := false
-
-		if !restartNoCosmovisor {
-			detection := cosmovisor.Detect(cfg.HomeDir)
-			if detection.Available {
-				useCosmovisor = true
-				sup = process.NewCosmovisor(cfg.HomeDir)
-			} else {
-				sup = process.New(cfg.HomeDir)
-			}
-		} else {
-			sup = process.New(cfg.HomeDir)
-		}
-
-		_, err := sup.Restart(process.StartOpts{HomeDir: cfg.HomeDir, Moniker: os.Getenv("MONIKER"), BinPath: findPchaind()})
-		if err != nil {
-			ui.PrintError(ui.ErrorMessage{
-				Problem: "Failed to restart node",
-				Causes: []string{
-					"Process could not be stopped cleanly",
-					"Start preconditions failed (see start command)",
-				},
-				Actions: []string{
-					"Check logs: push-validator logs",
-					"Try: push-validator stop; then start",
-				},
-			})
-			return err
-		}
-		if flagOutput == "json" {
-			p.JSON(map[string]any{"ok": true, "action": "restart", "cosmovisor": useCosmovisor})
-		} else {
-			if useCosmovisor {
-				p.Success("✓ Node restarted with Cosmovisor")
-			} else {
-				p.Success("✓ Node restarted")
-			}
-			fmt.Println()
-			fmt.Println(p.Colors.Info("Useful commands:"))
-			fmt.Println(p.Colors.Apply(p.Colors.Theme.Command, "  push-validator status"))
-			fmt.Println(p.Colors.Apply(p.Colors.Theme.Description, "  (check sync progress)"))
-			fmt.Println(p.Colors.Apply(p.Colors.Theme.Command, "  push-validator dashboard"))
-			fmt.Println(p.Colors.Apply(p.Colors.Theme.Description, "  (live dashboard)"))
-			fmt.Println(p.Colors.Apply(p.Colors.Theme.Command, "  push-validator logs"))
-			fmt.Println(p.Colors.Apply(p.Colors.Theme.Description, "  (view logs)"))
-		}
-		return nil
-	}}
-	restartCmd.Flags().StringVar(&restartBin, "bin", "", "Path to pchaind binary")
-	restartCmd.Flags().BoolVar(&restartNoCosmovisor, "no-cosmovisor", false, "Use direct pchaind instead of Cosmovisor")
-	rootCmd.AddCommand(restartCmd)
-
 	rootCmd.AddCommand(&cobra.Command{Use: "logs", Short: "Tail node logs", RunE: func(cmd *cobra.Command, args []string) error {
 		cfg := loadCfg()
 		var sup process.Supervisor
@@ -657,54 +334,11 @@ func init() {
 		Short:   "Withdraw all rewards and restake them",
 		Long:    "Automatically withdraw all rewards (commission and outstanding) and restake them to increase validator power",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			handleRestakeRewardsAll(loadCfg())
-			return nil
+			return handleRestakeRewardsAll(loadCfg())
 		},
 	}
 	rootCmd.AddCommand(restakeRewardsCmd)
 
-	// completion and version
-	rootCmd.AddCommand(&cobra.Command{Use: "completion [bash|zsh|fish|powershell]", Short: "Generate shell completion", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
-		switch args[0] {
-		case "bash":
-			return rootCmd.GenBashCompletion(os.Stdout)
-		case "zsh":
-			return rootCmd.GenZshCompletion(os.Stdout)
-		case "fish":
-			return rootCmd.GenFishCompletion(os.Stdout, true)
-		case "powershell":
-			return rootCmd.GenPowerShellCompletionWithDesc(os.Stdout)
-		default:
-			return fmt.Errorf("unknown shell: %s", args[0])
-		}
-	}})
-	// version command with semantic versioning
-	versionCmd := &cobra.Command{
-		Use:   "version",
-		Short: "Show version",
-		Run: func(cmd *cobra.Command, args []string) {
-			switch flagOutput {
-			case "json":
-				enc := json.NewEncoder(os.Stdout)
-				enc.SetIndent("", "  ")
-				_ = enc.Encode(map[string]string{
-					"version":    Version,
-					"commit":     Commit,
-					"build_date": BuildDate,
-				})
-			case "yaml":
-				data, _ := yaml.Marshal(map[string]string{
-					"version":    Version,
-					"commit":     Commit,
-					"build_date": BuildDate,
-				})
-				fmt.Println(string(data))
-			default:
-				fmt.Printf("push-validator %s (%s) built %s\n", Version, Commit, BuildDate)
-			}
-		},
-	}
-	rootCmd.AddCommand(versionCmd)
 }
 
 func Execute() {
@@ -727,438 +361,6 @@ func loadCfg() config.Config {
 	if flagGenesis != "" {
 		cfg.GenesisDomain = flagGenesis
 	}
-	if flagBin != "" {
-		os.Setenv("PCHAIND", flagBin)
-	}
 	return cfg
 }
 
-// createSnapshotProgressCallback creates a progress callback for snapshot downloads
-// that displays a visual progress bar during download.
-func createSnapshotProgressCallback(output string) snapshot.ProgressFunc {
-	var bar *ui.ProgressBar
-	return func(phase snapshot.ProgressPhase, current, total int64, message string) {
-		if output == "json" {
-			return
-		}
-		switch phase {
-		case snapshot.PhaseDownload:
-			if bar == nil && total > 0 {
-				bar = ui.NewProgressBar(os.Stdout, total)
-			}
-			if bar != nil {
-				bar.Update(current)
-			}
-		case snapshot.PhaseVerify:
-			if bar != nil {
-				bar.Finish()
-				bar = nil
-			}
-			if message != "" {
-				fmt.Printf("  → %s\n", message)
-			}
-		case snapshot.PhaseExtract:
-			if message != "" {
-				// Truncate long filenames to fit on one line
-				if len(message) > 60 {
-					message = message[:57] + "..."
-				}
-				fmt.Printf("\r  → Extracting: %-60s", message)
-			}
-		}
-	}
-}
-
-// handlePostStartFlow manages the post-start flow based on validator status.
-// Returns false if an error occurred (non-fatal), true if flow completed successfully.
-func handlePostStartFlow(cfg config.Config, p *ui.Printer) bool {
-	// First, check if the node is still syncing using comprehensive sync check
-	// (same logic as dashboard/status to ensure accuracy)
-	fmt.Println(p.Colors.Info("▸ Checking Sync Status"))
-
-	collector := metrics.NewWithoutCPU()
-	syncCtx, syncCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	snap := collector.Collect(syncCtx, "http://127.0.0.1:26657", cfg.GenesisDomain)
-	syncCancel()
-
-	// Consider synced only if:
-	// 1. CatchingUp is false AND
-	// 2. Local height is within 5 blocks of remote height (or remote height unavailable)
-	const syncTolerance = 5
-	isSyncing := snap.Chain.CatchingUp ||
-		(snap.Chain.RemoteHeight > 0 && snap.Chain.LocalHeight < snap.Chain.RemoteHeight-syncTolerance)
-
-	// DEBUG: Log sync status if verbose
-	if flagVerbose {
-		fmt.Printf("[DEBUG] Sync Check: CatchingUp=%v, LocalHeight=%d, RemoteHeight=%d, IsSyncing=%v\n",
-			snap.Chain.CatchingUp, snap.Chain.LocalHeight, snap.Chain.RemoteHeight, isSyncing)
-	}
-
-	if isSyncing {
-		// Node is still syncing - wait for sync to complete before validator checks
-		fmt.Println(p.Colors.Info("  ▸ Node is syncing with the network..."))
-		fmt.Println(p.Colors.Apply(p.Colors.Theme.Description, "    Waiting for sync to complete...\n"))
-		fmt.Println(p.Colors.Info("▸ Monitoring Sync Progress"))
-
-		// Wait for sync to complete using sync monitor
-		// Use correct supervisor based on whether Cosmovisor is available (determines log path)
-		var sup process.Supervisor
-		if detection := cosmovisor.Detect(cfg.HomeDir); detection.Available {
-			sup = process.NewCosmovisor(cfg.HomeDir)
-		} else {
-			sup = process.New(cfg.HomeDir)
-		}
-		remoteURL := "https://" + strings.TrimSuffix(cfg.GenesisDomain, "/") + ":443"
-
-		// Create reset function for retry logic
-		resetFunc := func() error {
-			fmt.Println(p.Colors.Info("    Stopping node..."))
-			if err := sup.Stop(); err != nil {
-				// Ignore stop errors - node might not be running
-			}
-			time.Sleep(2 * time.Second)
-
-			fmt.Println(p.Colors.Info("    Clearing data..."))
-			if err := admin.Reset(admin.ResetOptions{
-				HomeDir:      cfg.HomeDir,
-				BinPath:      findPchaind(),
-				KeepAddrBook: true,
-			}); err != nil {
-				return fmt.Errorf("reset failed: %w", err)
-			}
-
-			// Recreate priv_validator_state.json
-			pvs := filepath.Join(cfg.HomeDir, "data", "priv_validator_state.json")
-			if err := os.WriteFile(pvs, []byte("{\n  \"height\": \"0\",\n  \"round\": 0,\n  \"step\": 0\n}\n"), 0o644); err != nil {
-				return fmt.Errorf("failed to create priv_validator_state.json: %w", err)
-			}
-
-			fmt.Println(p.Colors.Info("    Restarting node..."))
-			_, err := sup.Start(process.StartOpts{
-				HomeDir: cfg.HomeDir,
-				Moniker: os.Getenv("MONIKER"),
-				BinPath: findPchaind(),
-			})
-			if err != nil {
-				return fmt.Errorf("restart failed: %w", err)
-			}
-			time.Sleep(5 * time.Second) // Give node time to initialize
-			return nil
-		}
-
-		// Note: With snapshot download, we don't need state sync reconfigure.
-		// The node already has data from the snapshot and just needs to catch up via block sync.
-
-		if err := syncmon.RunWithRetry(context.Background(), syncmon.RetryOptions{
-			Options: syncmon.Options{
-				LocalRPC:     "http://127.0.0.1:26657",
-				RemoteRPC:    remoteURL,
-				LogPath:      sup.LogPath(),
-				Window:       30,
-				Compact:      false,
-				Out:          os.Stdout,
-				Interval:     120 * time.Millisecond,
-				Quiet:        flagQuiet,
-				Debug:        flagDebug,
-				StuckTimeout: 30 * time.Minute, // Detect stuck sync
-			},
-			MaxRetries: 3,
-			ResetFunc:  resetFunc,
-		}); err != nil {
-			// Sync failed after retries - show warning and dashboard
-			fmt.Println()
-			fmt.Println(p.Colors.Warning("  ⚠ Sync failed after retries"))
-			fmt.Println(p.Colors.Apply(p.Colors.Theme.Description, "    Try: push-validator reset && push-validator start"))
-			showDashboardPrompt(cfg, p)
-			return false
-		}
-
-		// Sync complete - fall through to validator checks
-		fmt.Println()
-	} else {
-		// Node is already synced - show success message
-		fmt.Println(p.Colors.Success("  ✓ Node is synced"))
-	}
-
-	// Node is synced (or sync check failed) - proceed with validator checks
-	// Check if already a validator
-	v := validator.NewWith(validator.Options{
-		BinPath:       findPchaind(),
-		HomeDir:       cfg.HomeDir,
-		ChainID:       cfg.ChainID,
-		Keyring:       cfg.KeyringBackend,
-		GenesisDomain: cfg.GenesisDomain,
-		Denom:         cfg.Denom,
-	})
-
-	// Show status checking message
-	fmt.Println(p.Colors.Info("▸ Checking Validator Status"))
-
-	// Give the node a moment to fully initialize RPC after sync check
-	time.Sleep(2 * time.Second)
-
-	// Use longer timeout (30s) since IsValidator runs multiple sequential network commands:
-	// 1. show-validator (local) 2. query validators (remote RPC)
-	var isValidator bool
-	var err error
-	maxRetries := 2
-	for attempt := 0; attempt <= maxRetries; attempt++ {
-		statusCtx, statusCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		isValidator, err = v.IsValidator(statusCtx, "")
-		statusCancel()
-
-		if err == nil {
-			break
-		}
-
-		// Brief delay before retry
-		if attempt < maxRetries {
-			time.Sleep(2 * time.Second)
-		}
-	}
-
-	if err != nil {
-		// If we can't check status after retries, show warning but continue to dashboard
-		if flagVerbose {
-			fmt.Printf("  [DEBUG] IsValidator error: %v\n", err)
-		}
-		fmt.Println(p.Colors.Warning("  ⚠ Could not verify validator status (will retry in dashboard)"))
-		showDashboardPrompt(cfg, p)
-		return false
-	}
-
-	if isValidator {
-		// Already a validator - show success and dashboard
-		fmt.Println(p.Colors.Success("  ✓ Registered as validator"))
-		showDashboardPrompt(cfg, p)
-		return true
-	}
-
-	// Not a validator - show registration prompt
-	fmt.Println(p.Colors.Warning("  ⚠ Not registered as validator"))
-	fmt.Println()
-
-	// Check if we're in an interactive terminal
-	if !isTerminalInteractive() {
-		// Non-interactive - show next steps for scripts/CI
-		fmt.Println("Next steps to register as validator:")
-		fmt.Println("1. Get test tokens: https://faucet.push.org")
-		fmt.Println("2. Check balance: push-validator balance")
-		fmt.Println("3. Register: push-validator register-validator")
-		fmt.Println()
-		showDashboardPrompt(cfg, p)
-		return true
-	}
-
-	// Interactive prompt - use /dev/tty to avoid buffering os.Stdin
-	// This ensures stdin remains clean for subsequent log UI raw mode
-	fmt.Print("Register as validator now? (y/N) ")
-
-	ttyFile, err := os.OpenFile("/dev/tty", os.O_RDONLY, 0)
-	var response string
-	if err == nil {
-		reader := bufio.NewReader(ttyFile)
-		line, readErr := reader.ReadString('\n')
-		ttyFile.Close()
-		if readErr != nil {
-			// Error reading input - show dashboard
-			fmt.Println()
-			showDashboardPrompt(cfg, p)
-			return false
-		}
-		response = strings.ToLower(strings.TrimSpace(line))
-	} else {
-		// Fallback to stdin if /dev/tty unavailable
-		reader := bufio.NewReader(os.Stdin)
-		line, readErr := reader.ReadString('\n')
-		if readErr != nil {
-			fmt.Println()
-			showDashboardPrompt(cfg, p)
-			return false
-		}
-		response = strings.ToLower(strings.TrimSpace(line))
-	}
-
-	if response == "y" || response == "yes" {
-		// User wants to register
-		fmt.Println()
-		handleRegisterValidator(cfg)
-		fmt.Println()
-	} else {
-		// User declined - show them the steps to do it manually
-		fmt.Println()
-		fmt.Println("Next steps to register as validator:")
-		fmt.Println("1. Get test tokens: https://faucet.push.org")
-		fmt.Println("2. Check balance: push-validator balance")
-		fmt.Println("3. Register: push-validator register-validator")
-		fmt.Println()
-	}
-
-	// Always show dashboard at the end
-	showDashboardPrompt(cfg, p)
-	return true
-}
-
-// handleDashboard launches the interactive dashboard
-func handleDashboard(cfg config.Config) error {
-	opts := dashboard.Options{
-		Config:          cfg,
-		RefreshInterval: 3 * time.Second,
-		RPCTimeout:      5 * time.Second,
-		NoColor:         flagNoColor,
-		NoEmoji:         flagNoEmoji,
-		CLIVersion:      Version,
-		Debug:           false,
-	}
-	return runDashboardInteractive(opts)
-}
-
-// showDashboardPrompt displays a prompt asking user to press ENTER to launch dashboard
-// Always shows the prompt, but handles timeouts gracefully in non-interactive environments
-// Follows the install flow pattern with clear before/after messages
-func showDashboardPrompt(cfg config.Config, p *ui.Printer) {
-	fmt.Println()
-	fmt.Println("╔═══════════════════════════════════════════════════════════════╗")
-	fmt.Println("║                   DASHBOARD AVAILABLE                         ║")
-	fmt.Println("╚═══════════════════════════════════════════════════════════════╝")
-	fmt.Println()
-	fmt.Println("  The node is running in the background.")
-	fmt.Println("  Press ENTER to open the interactive dashboard (or Ctrl+C to skip)")
-	fmt.Println("  Note: The node will continue running in the background.")
-	fmt.Println()
-	fmt.Println("─────────────────────────────────────────────────────────────")
-	fmt.Print("Press ENTER to continue to the dashboard... ")
-
-	// Try /dev/tty first (best for interactive terminals)
-	ttyFile, err := os.OpenFile("/dev/tty", os.O_RDONLY, 0)
-	if err == nil {
-		// TTY available - wait for ENTER indefinitely (user is present)
-		reader := bufio.NewReader(ttyFile)
-		_, readErr := reader.ReadString('\n')
-		ttyFile.Close()
-		if readErr != nil {
-			// Ctrl+C or error
-			fmt.Println()
-			fmt.Println("  Dashboard skipped. Node is running in background.")
-			fmt.Println()
-			return
-		}
-		// User pressed ENTER - launch dashboard
-		fmt.Println()
-		_ = handleDashboard(cfg)
-
-		// After dashboard exit, show status
-		fmt.Println()
-		fmt.Println("═══════════════════════════════════════════════════════════════")
-		fmt.Println(p.Colors.Success("✓ Dashboard closed. Node is still running in background."))
-		fmt.Println("═══════════════════════════════════════════════════════════════")
-		fmt.Println()
-		return
-	}
-
-	// No TTY available - try stdin with timeout (for scripts/CI/non-interactive)
-	done := make(chan bool, 1)
-	go func() {
-		reader := bufio.NewReader(os.Stdin)
-		_, _ = reader.ReadString('\n')
-		done <- true
-	}()
-
-	select {
-	case <-done:
-		// Got input - launch dashboard
-		fmt.Println()
-		_ = handleDashboard(cfg)
-
-		// After dashboard exit, show status
-		fmt.Println()
-		fmt.Println("═══════════════════════════════════════════════════════════════")
-		fmt.Println(p.Colors.Success("✓ Dashboard closed. Node is still running in background."))
-		fmt.Println("═══════════════════════════════════════════════════════════════")
-		fmt.Println()
-	case <-time.After(2 * time.Second):
-		// Timeout - likely script/CI with no input available
-		fmt.Println()
-		fmt.Println("  Dashboard is available - run: push-validator dashboard")
-		fmt.Println()
-	}
-}
-
-// isTerminalInteractive checks if we're running in an interactive terminal
-func isTerminalInteractive() bool {
-	// Check stdin is a terminal
-	if !term.IsTerminal(int(os.Stdin.Fd())) {
-		return false
-	}
-	// Check stdout is a terminal
-	if !term.IsTerminal(int(os.Stdout.Fd())) {
-		return false
-	}
-	return true
-}
-
-// checkForUpdateBackground performs a non-blocking update check.
-// Uses cache to avoid checking more than once per 24 hours.
-// Stores result in updateCheckResult global for use by PersistentPostRun.
-func checkForUpdateBackground() {
-	cfg := loadCfg()
-
-	// Check cache first (avoid network calls if recently checked)
-	cache, err := update.LoadCache(cfg.HomeDir)
-	if err == nil && update.IsCacheValid(cache) {
-		// Use cached result, but re-verify in case version changed (e.g., after update)
-		if cache.UpdateAvailable && update.IsNewerVersion(Version, cache.LatestVersion) {
-			updateCheckResult = &update.CheckResult{
-				CurrentVersion:  strings.TrimPrefix(Version, "v"),
-				LatestVersion:   cache.LatestVersion,
-				UpdateAvailable: true,
-			}
-		}
-		return
-	}
-
-	// Perform network check with timeout
-	updater, err := update.NewUpdater(Version)
-	if err != nil {
-		return // Silently fail - don't disrupt user's command
-	}
-
-	result, err := updater.Check()
-	if err != nil {
-		return // Silently fail
-	}
-
-	// Save to cache
-	_ = update.SaveCache(cfg.HomeDir, &update.CacheEntry{
-		CheckedAt:       time.Now(),
-		LatestVersion:   result.LatestVersion,
-		UpdateAvailable: result.UpdateAvailable,
-	})
-
-	// Store result for notification
-	if result.UpdateAvailable {
-		updateCheckResult = result
-	}
-}
-
-// showUpdateNotification displays an update notification after command completes.
-func showUpdateNotification(latestVersion string) {
-	// Don't show in JSON/YAML output modes
-	if flagOutput == "json" || flagOutput == "yaml" {
-		return
-	}
-
-	// Don't show in quiet mode
-	if flagQuiet {
-		return
-	}
-
-	c := ui.NewColorConfig()
-	c.Enabled = c.Enabled && !flagNoColor
-
-	fmt.Println()
-	fmt.Println(c.Warning("─────────────────────────────────────────────────────────────"))
-	fmt.Printf(c.Warning("  Update available: %s → %s\n"), Version, latestVersion)
-	fmt.Println(c.Info("  Run: push-validator update"))
-	fmt.Println(c.Warning("─────────────────────────────────────────────────────────────"))
-}
