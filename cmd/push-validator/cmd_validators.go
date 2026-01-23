@@ -3,14 +3,12 @@ package main
 import (
     "context"
     "fmt"
-    "os/exec"
     "sort"
     "strconv"
     "strings"
     "sync"
     "time"
 
-    "github.com/pushchain/push-validator-cli/internal/config"
     "github.com/pushchain/push-validator-cli/internal/dashboard"
     ui "github.com/pushchain/push-validator-cli/internal/ui"
     "github.com/pushchain/push-validator-cli/internal/validator"
@@ -36,15 +34,14 @@ func truncateAddress(addr string, maxWidth int) string {
 
 // handleValidatorsWithFormat prints either a pretty table (default)
 // or raw JSON (--output=json at root) of the current validator set.
-func handleValidatorsWithFormat(cfg config.Config, jsonOut bool) error {
+func handleValidatorsWithFormat(d *Deps, jsonOut bool) error {
+    cfg := d.Cfg
     // For JSON output, query raw data directly (matches chain's native format)
     if jsonOut {
-        bin := findPchaind()
         remote := fmt.Sprintf("https://%s", cfg.GenesisDomain)
         ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
         defer cancel()
-        cmd := exec.CommandContext(ctx, bin, "query", "staking", "validators", "--node", remote, "-o", "json")
-        output, err := cmd.Output()
+        output, err := d.Runner.Run(ctx, findPchaind(), "query", "staking", "validators", "--node", remote, "-o", "json")
         if err != nil {
             if ctx.Err() == context.DeadlineExceeded {
                 return fmt.Errorf("validators: timeout connecting to %s", cfg.GenesisDomain)
@@ -60,7 +57,7 @@ func handleValidatorsWithFormat(cfg config.Config, jsonOut bool) error {
     ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
     defer cancel()
 
-    valList, err := validator.GetCachedValidatorsList(ctx, cfg)
+    valList, err := d.Fetcher.GetAllValidators(ctx, cfg)
     if err != nil {
         return fmt.Errorf("validators: %w", err)
     }
@@ -73,7 +70,7 @@ func handleValidatorsWithFormat(cfg config.Config, jsonOut bool) error {
     // Fetch my validator info to highlight in table
     myValidatorAddr := ""
     myValCtx, myValCancel := context.WithTimeout(context.Background(), 10*time.Second)
-    if myVal, err := validator.GetCachedMyValidator(myValCtx, cfg); err == nil {
+    if myVal, err := d.Fetcher.GetMyValidator(myValCtx, cfg); err == nil {
         myValidatorAddr = myVal.Address
     }
     myValCancel()

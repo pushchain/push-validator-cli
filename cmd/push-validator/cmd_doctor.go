@@ -46,23 +46,42 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 	}
 
 	c := getPrinter().Colors
-	results := []checkResult{}
 
+	// Create dependencies for checks
+	sup := process.New(cfg.HomeDir)
+	rpc := cfg.RPCLocal
+	if rpc == "" {
+		rpc = "http://127.0.0.1:26657"
+	}
+	localCli := node.New(rpc)
+	remoteCli := node.New(cfg.RemoteRPCURL())
+
+	results := runDoctorChecks(cfg, sup, localCli, remoteCli, c)
+
+	return doctorSummary(results, c)
+}
+
+// runDoctorChecks runs all diagnostic checks and returns results.
+func runDoctorChecks(cfg config.Config, sup process.Supervisor, localCli node.Client, remoteCli node.Client, c *ui.ColorConfig) []checkResult {
 	// Header
 	fmt.Println(c.Header(" VALIDATOR HEALTH CHECK "))
 	fmt.Println()
 
-	// Run all diagnostic checks
-	results = append(results, checkProcessRunning(cfg, c))
+	results := []checkResult{}
+	results = append(results, checkProcessRunning(sup, c))
 	results = append(results, checkRPCAccessible(cfg, c))
 	results = append(results, checkConfigFiles(cfg, c))
-	results = append(results, checkP2PPeers(cfg, c))
-	results = append(results, checkRemoteConnectivity(cfg, c))
+	results = append(results, checkP2PPeers(localCli, c))
+	results = append(results, checkRemoteConnectivity(remoteCli, cfg.GenesisDomain, c))
 	results = append(results, checkDiskSpace(cfg, c))
 	results = append(results, checkPermissions(cfg, c))
-	results = append(results, checkSyncStatus(cfg, c))
+	results = append(results, checkSyncStatus(localCli, c))
 	results = append(results, checkCosmovisor(cfg, c))
+	return results
+}
 
+// doctorSummary prints the summary of check results and returns an error if any checks failed.
+func doctorSummary(results []checkResult, c *ui.ColorConfig) error {
 	// Summary
 	fmt.Println()
 	fmt.Println(c.Separator(60))
@@ -95,8 +114,7 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func checkProcessRunning(cfg config.Config, c *ui.ColorConfig) checkResult {
-	sup := process.New(cfg.HomeDir)
+func checkProcessRunning(sup process.Supervisor, c *ui.ColorConfig) checkResult {
 	running := sup.IsRunning()
 
 	result := checkResult{Name: "Process Status"}
@@ -176,15 +194,9 @@ func checkConfigFiles(cfg config.Config, c *ui.ColorConfig) checkResult {
 	return result
 }
 
-func checkP2PPeers(cfg config.Config, c *ui.ColorConfig) checkResult {
+func checkP2PPeers(cli node.Client, c *ui.ColorConfig) checkResult {
 	result := checkResult{Name: "P2P Network"}
 
-	rpc := cfg.RPCLocal
-	if rpc == "" {
-		rpc = "http://127.0.0.1:26657"
-	}
-
-	cli := node.New(rpc)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
@@ -213,20 +225,17 @@ func checkP2PPeers(cfg config.Config, c *ui.ColorConfig) checkResult {
 	return result
 }
 
-func checkRemoteConnectivity(cfg config.Config, c *ui.ColorConfig) checkResult {
+func checkRemoteConnectivity(cli node.Client, domain string, c *ui.ColorConfig) checkResult {
 	result := checkResult{Name: "Remote Connectivity"}
-
-	remote := cfg.RemoteRPCURL()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	cli := node.New(remote)
 	_, err := cli.Status(ctx)
 
 	if err != nil {
 		result.Status = "fail"
-		result.Message = fmt.Sprintf("Cannot reach %s", cfg.GenesisDomain)
+		result.Message = fmt.Sprintf("Cannot reach %s", domain)
 		result.Details = []string{
 			fmt.Sprintf("Error: %v", err),
 			"Check internet connectivity",
@@ -234,7 +243,7 @@ func checkRemoteConnectivity(cfg config.Config, c *ui.ColorConfig) checkResult {
 		}
 	} else {
 		result.Status = "pass"
-		result.Message = fmt.Sprintf("Remote RPC accessible at %s", cfg.GenesisDomain)
+		result.Message = fmt.Sprintf("Remote RPC accessible at %s", domain)
 	}
 
 	printCheck(result, c)
@@ -304,15 +313,9 @@ func checkPermissions(cfg config.Config, c *ui.ColorConfig) checkResult {
 	return result
 }
 
-func checkSyncStatus(cfg config.Config, c *ui.ColorConfig) checkResult {
+func checkSyncStatus(cli node.Client, c *ui.ColorConfig) checkResult {
 	result := checkResult{Name: "Sync Status"}
 
-	rpc := cfg.RPCLocal
-	if rpc == "" {
-		rpc = "http://127.0.0.1:26657"
-	}
-
-	cli := node.New(rpc)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 

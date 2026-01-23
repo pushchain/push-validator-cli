@@ -180,9 +180,8 @@ func init() {
 		Use:   "status",
 		Short: "Show node status",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg := loadCfg()
-			sup := newSupervisor(cfg.HomeDir)
-			res := computeStatus(cfg, sup)
+			d := newDeps()
+			res := computeStatus(d)
 
 			// Strict mode: exit non-zero if issues detected
 			if statusStrict && (res.Error != "" || !res.Running || res.CatchingUp || res.Peers == 0) {
@@ -249,9 +248,9 @@ func init() {
 		sup := newSupervisor(cfg.HomeDir)
 		return handleFullReset(cfg, sup)
 	}})
-	rootCmd.AddCommand(&cobra.Command{Use: "backup", Short: "Backup config and validator state", RunE: func(cmd *cobra.Command, args []string) error { return handleBackup(loadCfg()) }})
+	rootCmd.AddCommand(&cobra.Command{Use: "backup", Short: "Backup config and validator state", RunE: func(cmd *cobra.Command, args []string) error { return handleBackup(newDeps()) }})
 	validatorsCmd := &cobra.Command{Use: "validators", Short: "List validators", RunE: func(cmd *cobra.Command, args []string) error {
-		return handleValidatorsWithFormat(loadCfg(), flagOutput == "json")
+		return handleValidatorsWithFormat(newDeps(), flagOutput == "json")
 	}}
 	rootCmd.AddCommand(validatorsCmd)
 	var balAddr string
@@ -259,14 +258,13 @@ func init() {
 		if balAddr != "" {
 			args = []string{balAddr}
 		}
-		return handleBalance(loadCfg(), args)
+		return handleBalance(newDeps(), args)
 	}}
 	balanceCmd.Flags().StringVar(&balAddr, "address", "", "Account address")
 	rootCmd.AddCommand(balanceCmd)
 	// register-validator: interactive flow with optional flag overrides
 	regCmd := &cobra.Command{Use: "register-validator", Short: "Register this node as validator", RunE: func(cmd *cobra.Command, args []string) error {
-		cfg := loadCfg()
-		return handleRegisterValidator(cfg)
+		return handleRegisterValidator(newDeps())
 	}}
 	regCmd.Flags().BoolVar(&flagRegisterCheckOnly, "check-only", false, "Exit after reporting validator registration status")
 	rootCmd.AddCommand(regCmd)
@@ -277,7 +275,7 @@ func init() {
 		Short: "Restore jailed validator to active status",
 		Long:  "Unjail a validator that was temporarily jailed for downtime, restoring it to the active validator set",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return handleUnjail(loadCfg())
+			return handleUnjail(newDeps())
 		},
 	}
 	rootCmd.AddCommand(unjailCmd)
@@ -289,7 +287,7 @@ func init() {
 		Short:   "Withdraw validator rewards and commission",
 		Long:    "Withdraw accumulated delegation rewards and optionally withdraw validator commission",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return handleWithdrawRewards(loadCfg())
+			return handleWithdrawRewards(newDeps())
 		},
 	}
 	rootCmd.AddCommand(withdrawRewardsCmd)
@@ -300,7 +298,7 @@ func init() {
 		Short: "Increase validator stake",
 		Long:  "Delegate additional tokens to increase your validator's stake and voting power",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return handleIncreaseStake(loadCfg())
+			return handleIncreaseStake(newDeps())
 		},
 	}
 	rootCmd.AddCommand(increaseStakeCmd)
@@ -312,7 +310,7 @@ func init() {
 		Short:   "Withdraw all rewards and restake them",
 		Long:    "Automatically withdraw all rewards (commission and outstanding) and restake them to increase validator power",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return handleRestakeRewardsAll(loadCfg())
+			return handleRestakeRewardsAll(newDeps())
 		},
 	}
 	rootCmd.AddCommand(restakeRewardsCmd)

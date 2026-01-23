@@ -1,20 +1,15 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"math/big"
-	"os"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/pushchain/push-validator-cli/internal/config"
 	"github.com/pushchain/push-validator-cli/internal/dashboard"
-	"github.com/pushchain/push-validator-cli/internal/node"
 	"github.com/pushchain/push-validator-cli/internal/validator"
-	"golang.org/x/term"
 )
 
 // handleRestakeRewardsAll orchestrates the restake-rewards-all flow:
@@ -25,8 +20,9 @@ import (
 // - ask for confirmation to restake rewards with edit/cancel options
 // - submit delegation transaction
 // - display results
-func handleRestakeRewardsAll(cfg config.Config) error {
+func handleRestakeRewardsAll(d *Deps) error {
 	p := getPrinter()
+	cfg := d.Cfg
 
 	if flagOutput != "json" {
 		fmt.Println()
@@ -39,17 +35,9 @@ func handleRestakeRewardsAll(cfg config.Config) error {
 		fmt.Print(p.Colors.Apply(p.Colors.Theme.Prompt, p.Colors.Emoji("🔍")+" Checking node sync status..."))
 	}
 
-	local := strings.TrimRight(cfg.RPCLocal, "/")
-	if local == "" {
-		local = "http://127.0.0.1:26657"
-	}
-	remoteHTTP := cfg.RemoteRPCURL()
-	cliLocal := node.New(local)
-	cliRemote := node.New(remoteHTTP)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	stLocal, err1 := cliLocal.Status(ctx)
-	_, err2 := cliRemote.RemoteStatus(ctx, remoteHTTP)
+	stLocal, err1 := d.Node.Status(ctx)
+	_, err2 := d.RemoteNode.RemoteStatus(ctx, cfg.RemoteRPCURL())
 	cancel()
 
 	if err1 != nil || err2 != nil {
@@ -89,7 +77,7 @@ func handleRestakeRewardsAll(cfg config.Config) error {
 	}
 
 	ctx2, cancel2 := context.WithTimeout(context.Background(), 10*time.Second)
-	myVal, statusErr := validator.GetCachedMyValidator(ctx2, cfg)
+	myVal, statusErr := d.Fetcher.GetMyValidator(ctx2, cfg)
 	cancel2()
 
 	if statusErr != nil {
@@ -127,7 +115,7 @@ func handleRestakeRewardsAll(cfg config.Config) error {
 	}
 
 	ctx3, cancel3 := context.WithTimeout(context.Background(), 5*time.Second)
-	commission, outstanding, rewardsErr := validator.GetValidatorRewards(ctx3, cfg, myVal.Address)
+	commission, outstanding, rewardsErr := d.Fetcher.GetRewards(ctx3, cfg, myVal.Address)
 	cancel3()
 
 	if flagOutput != "json" {
@@ -180,11 +168,11 @@ func handleRestakeRewardsAll(cfg config.Config) error {
 
 	if myVal.Address != "" {
 		ctx4, cancel4 := context.WithTimeout(context.Background(), 5*time.Second)
-		accountAddr, convErr := convertValidatorToAccountAddress(ctx4, myVal.Address)
+		accountAddr, convErr := convertValidatorToAccountAddress(ctx4, myVal.Address, d.Runner)
 		cancel4()
 		if convErr == nil {
 			ctx4b, cancel4b := context.WithTimeout(context.Background(), 5*time.Second)
-			foundKey, findErr := findKeyNameByAddress(ctx4b, cfg, accountAddr)
+			foundKey, findErr := findKeyNameByAddress(ctx4b, cfg, accountAddr, d.Runner)
 			cancel4b()
 			if findErr == nil {
 				keyName = foundKey
@@ -207,17 +195,8 @@ func handleRestakeRewardsAll(cfg config.Config) error {
 		fmt.Print(p.Colors.Apply(p.Colors.Theme.Prompt, "💸 Withdrawing all rewards..."))
 	}
 
-	v := validator.NewWith(validator.Options{
-		BinPath:       findPchaind(),
-		HomeDir:       cfg.HomeDir,
-		ChainID:       cfg.ChainID,
-		Keyring:       cfg.KeyringBackend,
-		GenesisDomain: cfg.GenesisDomain,
-		Denom:         cfg.Denom,
-	})
-
 	ctx5, cancel5 := context.WithTimeout(context.Background(), 90*time.Second)
-	txHash, withdrawErr := v.WithdrawRewards(ctx5, myVal.Address, keyName, true) // Always include commission
+	txHash, withdrawErr := d.Validator.WithdrawRewards(ctx5, myVal.Address, keyName, true) // Always include commission
 	cancel5()
 
 	if withdrawErr != nil {
@@ -276,86 +255,56 @@ func handleRestakeRewardsAll(cfg config.Config) error {
 	restakeAmount := maxRestakeable
 	restakeAmountWei := ""
 
-	if !flagNonInteractive && !flagYes && flagOutput != "json" {
-		savedStdin := os.Stdin
-		var tty *os.File
-		if !term.IsTerminal(int(savedStdin.Fd())) {
-			if t, err := os.OpenFile("/dev/tty", os.O_RDONLY, 0); err == nil {
-				tty = t
-				os.Stdin = t
-			}
-		}
-		if tty != nil {
-			defer func() {
-				os.Stdin = savedStdin
-				tty.Close()
-			}()
-		}
-
-		reader := bufio.NewReader(os.Stdin)
-
+	if d.Prompter.IsInteractive() && !flagYes && flagOutput != "json" {
 		for {
-			fmt.Printf("Restake %.6f PC? (y/n/edit) [y]: ", restakeAmount)
-			input, _ := reader.ReadString('\n')
-			input = strings.TrimSpace(strings.ToLower(input))
+			input, err := d.Prompter.ReadLine(fmt.Sprintf("Restake %.6f PC? (y/n/edit) [y]: ", restakeAmount))
+			if err != nil {
+				break // treat read error as confirm
+			}
+			input = strings.ToLower(input)
 
 			if input == "" || input == "y" || input == "yes" {
-				// Proceed with full amount
 				break
 			} else if input == "n" || input == "no" {
-				// Cancel restaking
 				fmt.Println()
 				fmt.Println(p.Colors.Info("Restaking cancelled. Funds remain in your wallet."))
 				fmt.Println()
-				if flagOutput == "json" {
-					getPrinter().JSON(map[string]any{
-						"ok":              true,
-						"withdraw_txhash": txHash,
-						"withdrawn":       fmt.Sprintf("%.6f", totalRewards),
-						"restaked":        "0",
-						"cancelled":       true,
-					})
-				}
 				return nil
 			} else if input == "edit" || input == "e" {
-				// Allow user to edit amount
 				fmt.Println()
 				for {
-					fmt.Printf("Enter amount to restake (0.01 - %.6f PC): ", maxRestakeable)
-					amountInput, _ := reader.ReadString('\n')
-					amountInput = strings.TrimSpace(amountInput)
+					amountInput, amtErr := d.Prompter.ReadLine(fmt.Sprintf("Enter amount to restake (0.01 - %.6f PC): ", maxRestakeable))
+					if amtErr != nil {
+						break
+					}
 
 					if amountInput == "" {
 						fmt.Println(p.Colors.Error(p.Colors.Emoji("⚠") + " Amount is required. Try again."))
 						continue
 					}
 
-					// Parse user input
 					customAmount, parseErr := strconv.ParseFloat(amountInput, 64)
 					if parseErr != nil {
 						fmt.Println(p.Colors.Error(p.Colors.Emoji("⚠") + " Invalid amount. Enter a number. Try again."))
 						continue
 					}
 
-					// Validate bounds
 					if customAmount < 0.01 {
 						fmt.Println(p.Colors.Error(p.Colors.Emoji("⚠") + " Amount too low. Minimum restake is 0.01 PC. Try again."))
 						continue
 					}
 					if customAmount > maxRestakeable {
-						fmt.Printf(p.Colors.Error(p.Colors.Emoji("⚠") + " Insufficient balance. Maximum: %.6f PC. Try again.\n"), maxRestakeable)
+						fmt.Printf(p.Colors.Error(p.Colors.Emoji("⚠")+" Insufficient balance. Maximum: %.6f PC. Try again.\n"), maxRestakeable)
 						continue
 					}
 
-					// Use custom amount
 					restakeAmount = customAmount
-					fmt.Printf(p.Colors.Success(p.Colors.Emoji("✓") + " Will restake %.6f PC\n"), restakeAmount)
+					fmt.Printf(p.Colors.Success(p.Colors.Emoji("✓")+" Will restake %.6f PC\n"), restakeAmount)
 					fmt.Println()
 					break
 				}
 				break
 			} else {
-				// Treat any other input as cancel
 				fmt.Println()
 				fmt.Println(p.Colors.Info("Invalid input. Restaking cancelled."))
 				fmt.Println()
@@ -374,7 +323,7 @@ func handleRestakeRewardsAll(cfg config.Config) error {
 	}
 
 	ctx6, cancel6 := context.WithTimeout(context.Background(), 90*time.Second)
-	delegateTxHash, delegateErr := v.Delegate(ctx6, validator.DelegateArgs{
+	delegateTxHash, delegateErr := d.Validator.Delegate(ctx6, validator.DelegateArgs{
 		ValidatorAddress: myVal.Address,
 		Amount:           restakeAmountWei,
 		KeyName:          keyName,

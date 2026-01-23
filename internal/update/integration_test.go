@@ -17,7 +17,12 @@ func TestFetchLatestRelease_Integration(t *testing.T) {
 		t.Skip("Skipping integration test in short mode")
 	}
 
-	release, err := FetchLatestRelease()
+	u, err := New("0.0.1")
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	release, err := u.FetchLatestRelease()
 	if err != nil {
 		t.Fatalf("FetchLatestRelease() error = %v", err)
 	}
@@ -42,11 +47,16 @@ func TestFetchReleaseByTag_Integration(t *testing.T) {
 		t.Skip("Skipping integration test in short mode")
 	}
 
+	u, err := New("0.0.1")
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
 	// This test requires a known release tag to exist
 	// Update this tag based on actual releases
 	testTag := "v0.1.0"
 
-	release, err := FetchReleaseByTag(testTag)
+	release, err := u.FetchReleaseByTag(testTag)
 	if err != nil {
 		t.Logf("Note: Release %s may not exist yet: %v", testTag, err)
 		t.Skipf("Skipping test for non-existent release: %v", err)
@@ -68,9 +78,9 @@ func TestCheck_Integration(t *testing.T) {
 		t.Skip("Skipping integration test in short mode")
 	}
 
-	u, err := NewUpdater("0.0.1")
+	u, err := New("0.0.1")
 	if err != nil {
-		t.Fatalf("NewUpdater() error = %v", err)
+		t.Fatalf("New() error = %v", err)
 	}
 
 	result, err := u.Check()
@@ -103,9 +113,9 @@ func TestFullUpdateWorkflow_Integration(t *testing.T) {
 	// but does NOT actually install to avoid modifying the system
 
 	t.Log("Step 1: Create updater")
-	u, err := NewUpdater("0.0.1")
+	u, err := New("0.0.1")
 	if err != nil {
-		t.Fatalf("NewUpdater() error = %v", err)
+		t.Fatalf("New() error = %v", err)
 	}
 
 	t.Log("Step 2: Check for updates")

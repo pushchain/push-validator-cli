@@ -23,9 +23,7 @@ const (
 )
 
 // FetchLatestRelease gets the latest release from GitHub
-func FetchLatestRelease() (*Release, error) {
-	client := &http.Client{Timeout: httpTimeout}
-
+func (u *Updater) FetchLatestRelease() (*Release, error) {
 	req, err := http.NewRequest("GET", latestReleaseURL, nil)
 	if err != nil {
 		return nil, err
@@ -33,7 +31,7 @@ func FetchLatestRelease() (*Release, error) {
 	req.Header.Set("Accept", "application/vnd.github.v3+json")
 	req.Header.Set("User-Agent", "push-validator-cli")
 
-	resp, err := client.Do(req)
+	resp, err := u.http.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch release: %w", err)
 	}
@@ -55,13 +53,12 @@ func FetchLatestRelease() (*Release, error) {
 }
 
 // FetchReleaseByTag gets a specific release by tag
-func FetchReleaseByTag(tag string) (*Release, error) {
+func (u *Updater) FetchReleaseByTag(tag string) (*Release, error) {
 	// Ensure tag has 'v' prefix
 	if !strings.HasPrefix(tag, "v") {
 		tag = "v" + tag
 	}
 
-	client := &http.Client{Timeout: httpTimeout}
 	url := fmt.Sprintf(releaseByTagURL, tag)
 
 	req, err := http.NewRequest("GET", url, nil)
@@ -71,7 +68,7 @@ func FetchReleaseByTag(tag string) (*Release, error) {
 	req.Header.Set("Accept", "application/vnd.github.v3+json")
 	req.Header.Set("User-Agent", "push-validator-cli")
 
-	resp, err := client.Do(req)
+	resp, err := u.http.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch release: %w", err)
 	}

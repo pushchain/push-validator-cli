@@ -65,41 +65,61 @@ func init() {
 	rootCmd.AddCommand(completionCmd)
 }
 
+// updateChecker abstracts the update check for testability.
+type updateChecker interface {
+	Check() (*update.CheckResult, error)
+}
+
 // checkForUpdateBackground performs a non-blocking update check.
 // Uses cache to avoid checking more than once per 24 hours.
 // Stores result in updateCheckResult global for use by PersistentPostRun.
 func checkForUpdateBackground() {
 	cfg := loadCfg()
+	result := checkForUpdateWith(cfg.HomeDir, Version, update.LoadCache, update.SaveCache, func(version string) (updateChecker, error) {
+		return update.New(version)
+	})
+	if result != nil {
+		updateCheckMu.Lock()
+		updateCheckResult = result
+		updateCheckMu.Unlock()
+	}
+}
 
+// checkForUpdateWith is the testable core of checkForUpdateBackground.
+func checkForUpdateWith(
+	homeDir string,
+	version string,
+	loadCache func(string) (*update.CacheEntry, error),
+	saveCache func(string, *update.CacheEntry) error,
+	newUpdater func(string) (updateChecker, error),
+) *update.CheckResult {
 	// Check cache first (avoid network calls if recently checked)
-	cache, err := update.LoadCache(cfg.HomeDir)
+	cache, err := loadCache(homeDir)
 	if err == nil && update.IsCacheValid(cache) {
 		// Use cached result, but re-verify in case version changed (e.g., after update)
-		if cache.UpdateAvailable && update.IsNewerVersion(Version, cache.LatestVersion) {
-			updateCheckMu.Lock()
-			updateCheckResult = &update.CheckResult{
-				CurrentVersion:  strings.TrimPrefix(Version, "v"),
+		if cache.UpdateAvailable && update.IsNewerVersion(version, cache.LatestVersion) {
+			return &update.CheckResult{
+				CurrentVersion:  strings.TrimPrefix(version, "v"),
 				LatestVersion:   cache.LatestVersion,
 				UpdateAvailable: true,
 			}
-			updateCheckMu.Unlock()
 		}
-		return
+		return nil
 	}
 
 	// Perform network check with timeout
-	updater, err := update.NewUpdater(Version)
+	updater, err := newUpdater(version)
 	if err != nil {
-		return // Silently fail - don't disrupt user's command
+		return nil // Silently fail - don't disrupt user's command
 	}
 
 	result, err := updater.Check()
 	if err != nil {
-		return // Silently fail
+		return nil // Silently fail
 	}
 
 	// Save to cache
-	_ = update.SaveCache(cfg.HomeDir, &update.CacheEntry{
+	_ = saveCache(homeDir, &update.CacheEntry{
 		CheckedAt:       time.Now(),
 		LatestVersion:   result.LatestVersion,
 		UpdateAvailable: result.UpdateAvailable,
@@ -107,10 +127,9 @@ func checkForUpdateBackground() {
 
 	// Store result for notification
 	if result.UpdateAvailable {
-		updateCheckMu.Lock()
-		updateCheckResult = result
-		updateCheckMu.Unlock()
+		return result
 	}
+	return nil
 }
 
 // showUpdateNotification displays an update notification after command completes.

@@ -1,13 +1,24 @@
 package update
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
-	"net/http/httptest"
 	"runtime"
 	"testing"
 	"time"
 )
+
+// mockHTTPDoer is a test helper for mocking HTTP calls.
+type mockHTTPDoer struct {
+	doFunc func(*http.Request) (*http.Response, error)
+}
+
+func (m *mockHTTPDoer) Do(req *http.Request) (*http.Response, error) {
+	return m.doFunc(req)
+}
 
 func TestIsNewerVersion(t *testing.T) {
 	tests := []struct {
@@ -305,7 +316,6 @@ func TestGetChecksumAsset(t *testing.T) {
 }
 
 func TestFetchLatestRelease(t *testing.T) {
-	// Create test release data
 	testRelease := Release{
 		TagName:     "v1.2.3",
 		Name:        "Release 1.2.3",
@@ -358,29 +368,63 @@ func TestFetchLatestRelease(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Create test server
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				// Verify request headers
-				if r.Header.Get("Accept") != "application/vnd.github.v3+json" {
-					t.Errorf("Accept header = %q, want %q",
-						r.Header.Get("Accept"), "application/vnd.github.v3+json")
-				}
-				if r.Header.Get("User-Agent") != "push-validator-cli" {
-					t.Errorf("User-Agent header = %q, want %q",
-						r.Header.Get("User-Agent"), "push-validator-cli")
-				}
+			mock := &mockHTTPDoer{
+				doFunc: func(req *http.Request) (*http.Response, error) {
+					// Verify request headers
+					if req.Header.Get("Accept") != "application/vnd.github.v3+json" {
+						t.Errorf("Accept header = %q, want %q",
+							req.Header.Get("Accept"), "application/vnd.github.v3+json")
+					}
+					if req.Header.Get("User-Agent") != "push-validator-cli" {
+						t.Errorf("User-Agent header = %q, want %q",
+							req.Header.Get("User-Agent"), "push-validator-cli")
+					}
 
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(tt.statusCode)
-				json.NewEncoder(w).Encode(tt.response)
-			}))
-			defer server.Close()
+					body, _ := json.Marshal(tt.response)
+					return &http.Response{
+						StatusCode: tt.statusCode,
+						Body:       io.NopCloser(bytes.NewReader(body)),
+					}, nil
+				},
+			}
 
-			// Note: We cannot easily test FetchLatestRelease because it uses hardcoded URLs
-			// This test demonstrates the pattern, but would require refactoring the source
-			// to inject the URL or use an interface
-			t.Skip("Cannot test FetchLatestRelease with hardcoded URLs - would need refactoring")
+			u := &Updater{
+				CurrentVersion: "1.0.0",
+				BinaryPath:     "/tmp/test-binary",
+				http:           mock,
+			}
+
+			release, err := u.FetchLatestRelease()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("FetchLatestRelease() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+
+			if !tt.wantErr && release != nil {
+				if release.TagName != testRelease.TagName {
+					t.Errorf("TagName = %q, want %q", release.TagName, testRelease.TagName)
+				}
+			}
 		})
+	}
+}
+
+func TestFetchLatestRelease_NetworkError(t *testing.T) {
+	mock := &mockHTTPDoer{
+		doFunc: func(req *http.Request) (*http.Response, error) {
+			return nil, fmt.Errorf("network unreachable")
+		},
+	}
+
+	u := &Updater{
+		CurrentVersion: "1.0.0",
+		BinaryPath:     "/tmp/test-binary",
+		http:           mock,
+	}
+
+	_, err := u.FetchLatestRelease()
+	if err == nil {
+		t.Error("FetchLatestRelease() expected error for network failure, got nil")
 	}
 }
 
@@ -428,9 +472,59 @@ func TestFetchReleaseByTag(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Note: Same limitation as FetchLatestRelease
-			t.Skip("Cannot test FetchReleaseByTag with hardcoded URLs - would need refactoring")
+			mock := &mockHTTPDoer{
+				doFunc: func(req *http.Request) (*http.Response, error) {
+					// Verify headers
+					if req.Header.Get("Accept") != "application/vnd.github.v3+json" {
+						t.Errorf("Accept header = %q, want %q",
+							req.Header.Get("Accept"), "application/vnd.github.v3+json")
+					}
+
+					body, _ := json.Marshal(tt.response)
+					return &http.Response{
+						StatusCode: tt.statusCode,
+						Body:       io.NopCloser(bytes.NewReader(body)),
+					}, nil
+				},
+			}
+
+			u := &Updater{
+				CurrentVersion: "1.0.0",
+				BinaryPath:     "/tmp/test-binary",
+				http:           mock,
+			}
+
+			release, err := u.FetchReleaseByTag(tt.tag)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("FetchReleaseByTag(%q) error = %v, wantErr %v", tt.tag, err, tt.wantErr)
+				return
+			}
+
+			if !tt.wantErr && release != nil {
+				if release.TagName != testRelease.TagName {
+					t.Errorf("TagName = %q, want %q", release.TagName, testRelease.TagName)
+				}
+			}
 		})
+	}
+}
+
+func TestFetchReleaseByTag_NetworkError(t *testing.T) {
+	mock := &mockHTTPDoer{
+		doFunc: func(req *http.Request) (*http.Response, error) {
+			return nil, fmt.Errorf("connection refused")
+		},
+	}
+
+	u := &Updater{
+		CurrentVersion: "1.0.0",
+		BinaryPath:     "/tmp/test-binary",
+		http:           mock,
+	}
+
+	_, err := u.FetchReleaseByTag("v1.0.0")
+	if err == nil {
+		t.Error("FetchReleaseByTag() expected error for network failure, got nil")
 	}
 }
 

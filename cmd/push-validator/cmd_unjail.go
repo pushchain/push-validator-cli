@@ -8,9 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pushchain/push-validator-cli/internal/config"
-	"github.com/pushchain/push-validator-cli/internal/node"
-	"github.com/pushchain/push-validator-cli/internal/validator"
 	"golang.org/x/term"
 )
 
@@ -20,8 +17,9 @@ import (
 // - prompt for key name
 // - submit unjail transaction
 // - display results
-func handleUnjail(cfg config.Config) error {
+func handleUnjail(d *Deps) error {
 	p := getPrinter()
+	cfg := d.Cfg
 
 	// Step 1: Check sync status
 	if flagOutput != "json" {
@@ -29,17 +27,9 @@ func handleUnjail(cfg config.Config) error {
 		fmt.Print(p.Colors.Apply(p.Colors.Theme.Prompt, p.Colors.Emoji("🔍")+" Checking node sync status..."))
 	}
 
-	local := strings.TrimRight(cfg.RPCLocal, "/")
-	if local == "" {
-		local = "http://127.0.0.1:26657"
-	}
-	remoteHTTP := cfg.RemoteRPCURL()
-	cliLocal := node.New(local)
-	cliRemote := node.New(remoteHTTP)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	stLocal, err1 := cliLocal.Status(ctx)
-	_, err2 := cliRemote.RemoteStatus(ctx, remoteHTTP)
+	stLocal, err1 := d.Node.Status(ctx)
+	_, err2 := d.RemoteNode.RemoteStatus(ctx, cfg.RemoteRPCURL())
 	cancel()
 
 	if err1 != nil || err2 != nil {
@@ -79,7 +69,7 @@ func handleUnjail(cfg config.Config) error {
 	}
 
 	ctx2, cancel2 := context.WithTimeout(context.Background(), 10*time.Second)
-	myVal, statusErr := validator.GetCachedMyValidator(ctx2, cfg)
+	myVal, statusErr := d.Fetcher.GetMyValidator(ctx2, cfg)
 	cancel2()
 
 	if statusErr != nil {
@@ -169,12 +159,12 @@ func handleUnjail(cfg config.Config) error {
 	if myVal.Address != "" {
 		// Convert validator address to account address
 		addrCtx, addrCancel := context.WithTimeout(context.Background(), 10*time.Second)
-		accountAddr, convErr := convertValidatorToAccountAddress(addrCtx, myVal.Address)
+		accountAddr, convErr := convertValidatorToAccountAddress(addrCtx, myVal.Address, d.Runner)
 		addrCancel()
 		if convErr == nil {
 			// Try to find the key in the keyring
 			keyCtx, keyCancel := context.WithTimeout(context.Background(), 10*time.Second)
-			foundKey, findErr := findKeyNameByAddress(keyCtx, cfg, accountAddr)
+			foundKey, findErr := findKeyNameByAddress(keyCtx, cfg, accountAddr, d.Runner)
 			keyCancel()
 			if findErr == nil {
 				keyName = foundKey
@@ -231,7 +221,7 @@ func handleUnjail(cfg config.Config) error {
 
 	// Convert validator address to account address for balance check
 	balAddrCtx, balAddrCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	accountAddr, addrErr := convertValidatorToAccountAddress(balAddrCtx, myVal.Address)
+	accountAddr, addrErr := convertValidatorToAccountAddress(balAddrCtx, myVal.Address, d.Runner)
 	balAddrCancel()
 	if addrErr != nil {
 		if flagOutput == "json" {
@@ -246,7 +236,7 @@ func handleUnjail(cfg config.Config) error {
 
 	// Get EVM address for display
 	evmCtx2, evmCancel2 := context.WithTimeout(context.Background(), 10*time.Second)
-	evmAddr, evmErr := getEVMAddress(evmCtx2, accountAddr)
+	evmAddr, evmErr := getEVMAddress(evmCtx2, accountAddr, d.Runner)
 	evmCancel2()
 	if evmErr != nil {
 		evmAddr = "" // Not critical, we can proceed without EVM address
@@ -269,19 +259,10 @@ func handleUnjail(cfg config.Config) error {
 		fmt.Print(p.Colors.Apply(p.Colors.Theme.Prompt, p.Colors.Emoji("📤")+" Submitting unjail transaction..."))
 	}
 
-	v := validator.NewWith(validator.Options{
-		BinPath:       findPchaind(),
-		HomeDir:       cfg.HomeDir,
-		ChainID:       cfg.ChainID,
-		Keyring:       cfg.KeyringBackend,
-		GenesisDomain: cfg.GenesisDomain,
-		Denom:         cfg.Denom,
-	})
-
 	ctx3, cancel3 := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel3()
 
-	txHash, err := v.Unjail(ctx3, keyName)
+	txHash, err := d.Validator.Unjail(ctx3, keyName)
 	if err != nil {
 		if flagOutput == "json" {
 			getPrinter().JSON(map[string]any{"ok": false, "error": err.Error()})

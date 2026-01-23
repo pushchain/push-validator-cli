@@ -6,3 +6,4 @@ scripts/build/pchaind
 .coverage/
 coverage.out
 coverage.html
+*.out

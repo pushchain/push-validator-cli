@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"os"
@@ -314,50 +313,30 @@ func handlePostStartFlow(cfg config.Config, p *ui.Printer) bool {
 	// Give the node a moment to fully initialize RPC after sync check
 	time.Sleep(2 * time.Second)
 
-	// Use longer timeout (30s) since IsValidator runs multiple sequential network commands:
-	// 1. show-validator (local) 2. query validators (remote RPC)
-	var isValidator bool
-	var err error
-	maxRetries := 2
-	for attempt := 0; attempt <= maxRetries; attempt++ {
-		statusCtx, statusCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		isValidator, err = v.IsValidator(statusCtx, "")
-		statusCancel()
+	valResult := checkValidatorRegistration(v, 2)
 
-		if err == nil {
-			break
-		}
-
-		// Brief delay before retry
-		if attempt < maxRetries {
-			time.Sleep(2 * time.Second)
-		}
-	}
-
-	if err != nil {
-		// If we can't check status after retries, show warning but continue to dashboard
+	if valResult.Error != nil {
 		if flagVerbose {
-			fmt.Printf("  [DEBUG] IsValidator error: %v\n", err)
+			fmt.Printf("  [DEBUG] IsValidator error: %v\n", valResult.Error)
 		}
 		fmt.Println(p.Colors.Warning("  " + p.Colors.Emoji("⚠") + " Could not verify validator status (will retry in dashboard)"))
 		showDashboardPrompt(cfg, p)
 		return false
 	}
 
-	if isValidator {
-		// Already a validator - show success and dashboard
-		fmt.Println(p.Colors.Success("  " + p.Colors.Emoji("✓") + " Registered as validator"))
+	decision := computePostStartDecision(valResult, isTerminalInteractive())
+
+	switch decision {
+	case actionShowDashboard:
+		if valResult.IsValidator {
+			fmt.Println(p.Colors.Success("  " + p.Colors.Emoji("✓") + " Registered as validator"))
+		}
 		showDashboardPrompt(cfg, p)
 		return true
-	}
 
-	// Not a validator - show registration prompt
-	fmt.Println(p.Colors.Warning("  " + p.Colors.Emoji("⚠") + " Not registered as validator"))
-	fmt.Println()
-
-	// Check if we're in an interactive terminal
-	if !isTerminalInteractive() {
-		// Non-interactive - show next steps for scripts/CI
+	case actionShowSteps:
+		fmt.Println(p.Colors.Warning("  " + p.Colors.Emoji("⚠") + " Not registered as validator"))
+		fmt.Println()
 		fmt.Println("Next steps to register as validator:")
 		fmt.Println("1. Get test tokens: https://faucet.push.org")
 		fmt.Println("2. Check balance: push-validator balance")
@@ -365,58 +344,36 @@ func handlePostStartFlow(cfg config.Config, p *ui.Printer) bool {
 		fmt.Println()
 		showDashboardPrompt(cfg, p)
 		return true
-	}
 
-	// Interactive prompt - use /dev/tty to avoid buffering os.Stdin
-	// This ensures stdin remains clean for subsequent log UI raw mode
-	fmt.Print("Register as validator now? (y/N) ")
-
-	ttyFile, err := os.OpenFile("/dev/tty", os.O_RDONLY, 0)
-	var response string
-	if err == nil {
-		reader := bufio.NewReader(ttyFile)
-		line, readErr := reader.ReadString('\n')
-		ttyFile.Close()
-		if readErr != nil {
-			// Error reading input - show dashboard
-			fmt.Println()
+	case actionPromptRegister:
+		fmt.Println(p.Colors.Warning("  " + p.Colors.Emoji("⚠") + " Not registered as validator"))
+		fmt.Println()
+		prompter := &ttyPrompter{}
+		response, err := prompter.ReadLine("Register as validator now? (y/N) ")
+		if err != nil {
 			showDashboardPrompt(cfg, p)
 			return false
 		}
-		response = strings.ToLower(strings.TrimSpace(line))
-	} else {
-		// Fallback to stdin if /dev/tty unavailable
-		reader := bufio.NewReader(os.Stdin)
-		line, readErr := reader.ReadString('\n')
-		if readErr != nil {
+		response = strings.ToLower(response)
+
+		if response == "y" || response == "yes" {
 			fmt.Println()
-			showDashboardPrompt(cfg, p)
-			return false
+			if err := handleRegisterValidator(newDeps()); err != nil {
+				return false
+			}
+			fmt.Println()
+		} else {
+			fmt.Println()
+			fmt.Println("Next steps to register as validator:")
+			fmt.Println("1. Get test tokens: https://faucet.push.org")
+			fmt.Println("2. Check balance: push-validator balance")
+			fmt.Println("3. Register: push-validator register-validator")
+			fmt.Println()
 		}
-		response = strings.ToLower(strings.TrimSpace(line))
+		showDashboardPrompt(cfg, p)
+		return true
 	}
 
-	if response == "y" || response == "yes" {
-		// User wants to register
-		fmt.Println()
-		if err := handleRegisterValidator(cfg); err != nil {
-			// Error already printed in handleRegisterValidator
-			// Just return false to indicate flow didn't complete successfully
-			return false
-		}
-		fmt.Println()
-	} else {
-		// User declined - show them the steps to do it manually
-		fmt.Println()
-		fmt.Println("Next steps to register as validator:")
-		fmt.Println("1. Get test tokens: https://faucet.push.org")
-		fmt.Println("2. Check balance: push-validator balance")
-		fmt.Println("3. Register: push-validator register-validator")
-		fmt.Println()
-	}
-
-	// Always show dashboard at the end
-	showDashboardPrompt(cfg, p)
 	return true
 }
 
@@ -434,10 +391,78 @@ func handleDashboard(cfg config.Config) error {
 	return runDashboardInteractive(opts)
 }
 
-// showDashboardPrompt displays a prompt asking user to press ENTER to launch dashboard
-// Always shows the prompt, but handles timeouts gracefully in non-interactive environments
-// Follows the install flow pattern with clear before/after messages
+// showDashboardPrompt displays a prompt asking user to press ENTER to launch dashboard.
 func showDashboardPrompt(cfg config.Config, p *ui.Printer) {
+	showDashboardPromptWith(cfg, p, &ttyPrompter{})
+}
+
+// isTerminalInteractive checks if we're running in an interactive terminal
+func isTerminalInteractive() bool {
+	return isTerminalInteractiveWith(os.Stdin.Fd(), os.Stdout.Fd())
+}
+
+// isTerminalInteractiveWith is a testable version that accepts file descriptors.
+func isTerminalInteractiveWith(stdinFd, stdoutFd uintptr) bool {
+	if !term.IsTerminal(int(stdinFd)) {
+		return false
+	}
+	if !term.IsTerminal(int(stdoutFd)) {
+		return false
+	}
+	return true
+}
+
+// valCheckResult holds the result of a validator registration check.
+type valCheckResult struct {
+	IsValidator bool
+	Error       error
+}
+
+// checkValidatorRegistration checks if the node is registered as a validator with retries.
+func checkValidatorRegistration(v validator.Service, maxRetries int) valCheckResult {
+	var isValidator bool
+	var err error
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		statusCtx, statusCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		isValidator, err = v.IsValidator(statusCtx, "")
+		statusCancel()
+
+		if err == nil {
+			break
+		}
+
+		if attempt < maxRetries {
+			time.Sleep(2 * time.Second)
+		}
+	}
+	return valCheckResult{IsValidator: isValidator, Error: err}
+}
+
+// postStartAction represents what action to take after the post-start checks.
+type postStartAction string
+
+const (
+	actionShowDashboard   postStartAction = "show_dashboard"
+	actionPromptRegister  postStartAction = "prompt_register"
+	actionShowSteps       postStartAction = "show_steps"
+)
+
+// computePostStartDecision determines what to do based on validator check results and interactivity.
+func computePostStartDecision(valResult valCheckResult, isInteractive bool) postStartAction {
+	if valResult.Error != nil {
+		return actionShowDashboard
+	}
+	if valResult.IsValidator {
+		return actionShowDashboard
+	}
+	if !isInteractive {
+		return actionShowSteps
+	}
+	return actionPromptRegister
+}
+
+// showDashboardPromptWith is a testable version that uses a Prompter.
+func showDashboardPromptWith(cfg config.Config, p *ui.Printer, prompter Prompter) {
 	fmt.Println()
 	fmt.Println("╔═══════════════════════════════════════════════════════════════╗")
 	fmt.Println("║                      DASHBOARD AVAILABLE                      ║")
@@ -448,74 +473,29 @@ func showDashboardPrompt(cfg config.Config, p *ui.Printer) {
 	fmt.Println("  Note: The node will continue running in the background.")
 	fmt.Println()
 	fmt.Println("─────────────────────────────────────────────────────────────")
-	fmt.Print("Press ENTER to continue to the dashboard... ")
 
-	// Try /dev/tty first (best for interactive terminals)
-	ttyFile, err := os.OpenFile("/dev/tty", os.O_RDONLY, 0)
-	if err == nil {
-		// TTY available - wait for ENTER indefinitely (user is present)
-		reader := bufio.NewReader(ttyFile)
-		_, readErr := reader.ReadString('\n')
-		ttyFile.Close()
-		if readErr != nil {
-			// Ctrl+C or error
-			fmt.Println()
-			fmt.Println("  Dashboard skipped. Node is running in background.")
-			fmt.Println()
-			return
-		}
-		// User pressed ENTER - launch dashboard
-		fmt.Println()
-		_ = handleDashboard(cfg)
-
-		// After dashboard exit, show status
-		fmt.Println()
-		fmt.Println("═══════════════════════════════════════════════════════════════")
-		fmt.Println(p.Colors.Success(p.Colors.Emoji("✓") + " Dashboard closed. Node is still running in background."))
-		fmt.Println("═══════════════════════════════════════════════════════════════")
+	if !prompter.IsInteractive() {
+		fmt.Println("  Dashboard is available - run: push-validator dashboard")
 		fmt.Println()
 		return
 	}
 
-	// No TTY available - try stdin with timeout (for scripts/CI/non-interactive)
-	done := make(chan bool, 1)
-	go func() {
-		reader := bufio.NewReader(os.Stdin)
-		_, _ = reader.ReadString('\n')
-		done <- true
-	}()
-
-	select {
-	case <-done:
-		// Got input - launch dashboard
+	_, err := prompter.ReadLine("Press ENTER to continue to the dashboard... ")
+	if err != nil {
 		fmt.Println()
-		_ = handleDashboard(cfg)
-
-		// After dashboard exit, show status
+		fmt.Println("  Dashboard skipped. Node is running in background.")
 		fmt.Println()
-		fmt.Println("═══════════════════════════════════════════════════════════════")
-		fmt.Println(p.Colors.Success(p.Colors.Emoji("✓") + " Dashboard closed. Node is still running in background."))
-		fmt.Println("═══════════════════════════════════════════════════════════════")
-		fmt.Println()
-	case <-time.After(2 * time.Second):
-		// Timeout - likely script/CI with no input available
-		fmt.Println()
-		fmt.Println("  Dashboard is available - run: push-validator dashboard")
-		fmt.Println()
+		return
 	}
-}
 
-// isTerminalInteractive checks if we're running in an interactive terminal
-func isTerminalInteractive() bool {
-	// Check stdin is a terminal
-	if !term.IsTerminal(int(os.Stdin.Fd())) {
-		return false
-	}
-	// Check stdout is a terminal
-	if !term.IsTerminal(int(os.Stdout.Fd())) {
-		return false
-	}
-	return true
+	fmt.Println()
+	_ = handleDashboard(cfg)
+
+	fmt.Println()
+	fmt.Println("═══════════════════════════════════════════════════════════════")
+	fmt.Println(p.Colors.Success(p.Colors.Emoji("✓") + " Dashboard closed. Node is still running in background."))
+	fmt.Println("═══════════════════════════════════════════════════════════════")
+	fmt.Println()
 }
 
 // createSnapshotProgressCallback creates a progress callback for snapshot downloads

@@ -4,17 +4,16 @@ import (
     "fmt"
 
     "github.com/pushchain/push-validator-cli/internal/admin"
-    "github.com/pushchain/push-validator-cli/internal/config"
 )
 
 // handleBackup creates a backup archive of the node configuration and
 // prints the resulting path, or a JSON object when --output=json.
-func handleBackup(cfg config.Config) error {
-    path, err := admin.Backup(admin.BackupOptions{HomeDir: cfg.HomeDir})
+func handleBackup(d *Deps) error {
+    path, err := admin.Backup(admin.BackupOptions{HomeDir: d.Cfg.HomeDir})
     if err != nil {
-        if flagOutput == "json" { getPrinter().JSON(map[string]any{"ok": false, "error": err.Error()}) } else { getPrinter().Error(fmt.Sprintf("backup error: %v", err)) }
+        if flagOutput == "json" { d.Printer.JSON(map[string]any{"ok": false, "error": err.Error()}) } else { d.Printer.Error(fmt.Sprintf("backup error: %v", err)) }
         return err
     }
-    if flagOutput == "json" { getPrinter().JSON(map[string]any{"ok": true, "backup_path": path}) } else { getPrinter().Success(fmt.Sprintf("backup created: %s", path)) }
+    if flagOutput == "json" { d.Printer.JSON(map[string]any{"ok": true, "backup_path": path}) } else { d.Printer.Success(fmt.Sprintf("backup created: %s", path)) }
     return nil
 }

@@ -1,13 +1,11 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
 	"math/big"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -17,12 +15,16 @@ import (
 	"github.com/pushchain/push-validator-cli/internal/process"
 	ui "github.com/pushchain/push-validator-cli/internal/ui"
 	"github.com/pushchain/push-validator-cli/internal/validator"
-	"golang.org/x/term"
 )
 
 // newSupervisor creates a process supervisor, using cosmovisor if available and configured.
 func newSupervisor(homeDir string) process.Supervisor {
-	if detection := cosmovisor.Detect(homeDir); detection.Available && detection.SetupComplete {
+	return newSupervisorWith(homeDir, cosmovisor.Detect)
+}
+
+// newSupervisorWith is the testable version that accepts a detector function.
+func newSupervisorWith(homeDir string, detect func(string) cosmovisor.DetectionResult) process.Supervisor {
+	if detection := detect(homeDir); detection.Available && detection.SetupComplete {
 		return process.NewCosmovisor(homeDir)
 	}
 	return process.New(homeDir)
@@ -75,78 +77,95 @@ func getenvDefault(k, d string) string {
 // getPrinter returns a UI printer bound to the current --output flag.
 func getPrinter() ui.Printer { return ui.NewPrinter(flagOutput) }
 
+// parseDebugAddrField extracts a named field from pchaind debug addr output.
+// The output format is lines like "Bech32 Acc: push1...", "Address (hex): 6AD3...".
+// fieldPrefix should be e.g. "Bech32 Acc:" or "Address (hex):".
+func parseDebugAddrField(output []byte, fieldPrefix string) (string, error) {
+	lines := strings.Split(string(output), "\n")
+	for _, line := range lines {
+		if strings.HasPrefix(line, fieldPrefix) {
+			parts := strings.Fields(line)
+			if len(parts) >= 3 {
+				return parts[len(parts)-1], nil
+			}
+		}
+	}
+	return "", fmt.Errorf("could not find %s in debug output", fieldPrefix)
+}
+
+// parseKeysListJSON parses the JSON output from pchaind keys list and finds the key name
+// for the given target address.
+func parseKeysListJSON(output []byte, targetAddress string) (string, error) {
+	var keys []struct {
+		Name    string `json:"name"`
+		Address string `json:"address"`
+	}
+	if err := json.Unmarshal(output, &keys); err != nil {
+		return "", fmt.Errorf("failed to parse keys: %w", err)
+	}
+	for _, key := range keys {
+		if key.Address == targetAddress {
+			return key.Name, nil
+		}
+	}
+	return "", fmt.Errorf("no key found for address %s", targetAddress)
+}
+
 // convertValidatorToAccountAddress converts a validator operator address (pushvaloper...)
 // to its corresponding account address (push...) using pchaind debug addr
-func convertValidatorToAccountAddress(ctx context.Context, validatorAddress string) (string, error) {
+func convertValidatorToAccountAddress(ctx context.Context, validatorAddress string, runners ...CommandRunner) (string, error) {
 	if ctx == nil {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 	}
+	var runner CommandRunner
+	if len(runners) > 0 && runners[0] != nil {
+		runner = runners[0]
+	} else {
+		runner = &execRunner{}
+	}
 	bin := findPchaind()
-	cmd := exec.CommandContext(ctx, bin, "debug", "addr", validatorAddress)
-	output, err := cmd.Output()
+	output, err := runner.Run(ctx, bin, "debug", "addr", validatorAddress)
 	if err != nil {
 		return "", fmt.Errorf("failed to convert address: %w", err)
 	}
-
-	// Parse the output to find "Bech32 Acc: push1..."
-	// Output format:
-	// Address: [... bytes ...]
-	// Address (hex): 6AD36CEE...
-	// Bech32 Acc: push1dtfkemne22yusl2cn5y6lvewxwfk0a9rcs7rv6
-	// Bech32 Val: pushvaloper1...
-	// Bech32 Con: pushvalcons1...
-	lines := strings.Split(string(output), "\n")
-	for _, line := range lines {
-		if strings.HasPrefix(line, "Bech32 Acc:") {
-			parts := strings.Fields(line)
-			if len(parts) >= 3 {
-				return parts[2], nil
-			}
-		}
-	}
-
-	return "", fmt.Errorf("could not find Bech32 Acc in debug output")
+	return parseDebugAddrField(output, "Bech32 Acc:")
 }
 
 // getEVMAddress converts a bech32 address (push...) to EVM hex format (0x...)
 // using pchaind debug addr command
-func getEVMAddress(ctx context.Context, address string) (string, error) {
+func getEVMAddress(ctx context.Context, address string, runners ...CommandRunner) (string, error) {
 	if ctx == nil {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 	}
+	var runner CommandRunner
+	if len(runners) > 0 && runners[0] != nil {
+		runner = runners[0]
+	} else {
+		runner = &execRunner{}
+	}
 	bin := findPchaind()
-	cmd := exec.CommandContext(ctx, bin, "debug", "addr", address)
-	output, err := cmd.Output()
+	output, err := runner.Run(ctx, bin, "debug", "addr", address)
 	if err != nil {
 		return "", fmt.Errorf("failed to convert address to EVM format: %w", err)
 	}
 
-	// Parse the output to find "Address (hex): ..."
-	lines := strings.Split(string(output), "\n")
-	for _, line := range lines {
-		if strings.HasPrefix(line, "Address (hex):") {
-			parts := strings.Fields(line)
-			if len(parts) >= 3 {
-				// Add 0x prefix if not present
-				hexAddr := parts[2]
-				if !strings.HasPrefix(hexAddr, "0x") {
-					hexAddr = "0x" + hexAddr
-				}
-				return hexAddr, nil
-			}
-		}
+	hexAddr, parseErr := parseDebugAddrField(output, "Address (hex):")
+	if parseErr != nil {
+		return "", parseErr
 	}
-
-	return "", fmt.Errorf("could not find Address (hex) in debug output")
+	if !strings.HasPrefix(hexAddr, "0x") {
+		hexAddr = "0x" + hexAddr
+	}
+	return hexAddr, nil
 }
 
 // hexToBech32Address converts a hex address (0x... or just hex bytes) to bech32 format (push1...)
 // using pchaind debug addr command
-func hexToBech32Address(ctx context.Context, hexAddr string) (string, error) {
+func hexToBech32Address(ctx context.Context, hexAddr string, runners ...CommandRunner) (string, error) {
 	if ctx == nil {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(context.Background(), 10*time.Second)
@@ -157,58 +176,39 @@ func hexToBech32Address(ctx context.Context, hexAddr string) (string, error) {
 		hexAddr = hexAddr[2:]
 	}
 
+	var runner CommandRunner
+	if len(runners) > 0 && runners[0] != nil {
+		runner = runners[0]
+	} else {
+		runner = &execRunner{}
+	}
 	bin := findPchaind()
-	cmd := exec.CommandContext(ctx, bin, "debug", "addr", hexAddr)
-	output, err := cmd.Output()
+	output, err := runner.Run(ctx, bin, "debug", "addr", hexAddr)
 	if err != nil {
 		return "", fmt.Errorf("failed to convert hex address to bech32: %w", err)
 	}
-
-	// Parse the output to find "Bech32 Acc: push1..."
-	lines := strings.Split(string(output), "\n")
-	for _, line := range lines {
-		if strings.HasPrefix(line, "Bech32 Acc:") {
-			parts := strings.Fields(line)
-			if len(parts) >= 3 {
-				return parts[2], nil
-			}
-		}
-	}
-
-	return "", fmt.Errorf("could not find Bech32 Acc in debug output")
+	return parseDebugAddrField(output, "Bech32 Acc:")
 }
 
 // findKeyNameByAddress finds the key name in the keyring that corresponds to the given address
-func findKeyNameByAddress(ctx context.Context, cfg config.Config, accountAddress string) (string, error) {
+func findKeyNameByAddress(ctx context.Context, cfg config.Config, accountAddress string, runners ...CommandRunner) (string, error) {
 	if ctx == nil {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 	}
+	var runner CommandRunner
+	if len(runners) > 0 && runners[0] != nil {
+		runner = runners[0]
+	} else {
+		runner = &execRunner{}
+	}
 	bin := findPchaind()
-	cmd := exec.CommandContext(ctx, bin, "keys", "list", "--keyring-backend", cfg.KeyringBackend, "--home", cfg.HomeDir, "--output", "json")
-	output, err := cmd.Output()
+	output, err := runner.Run(ctx, bin, "keys", "list", "--keyring-backend", cfg.KeyringBackend, "--home", cfg.HomeDir, "--output", "json")
 	if err != nil {
 		return "", fmt.Errorf("failed to list keys: %w", err)
 	}
-
-	// Parse the JSON output to find a key with matching address
-	var keys []struct {
-		Name    string `json:"name"`
-		Address string `json:"address"`
-	}
-	if err := json.Unmarshal(output, &keys); err != nil {
-		return "", fmt.Errorf("failed to parse keys: %w", err)
-	}
-
-	// Find matching key
-	for _, key := range keys {
-		if key.Address == accountAddress {
-			return key.Name, nil
-		}
-	}
-
-	return "", fmt.Errorf("no key found for address %s", accountAddress)
+	return parseKeysListJSON(output, accountAddress)
 }
 
 // waitForSufficientBalance checks if the account has enough balance to pay gas fees
@@ -216,7 +216,6 @@ func findKeyNameByAddress(ctx context.Context, cfg config.Config, accountAddress
 // requiredBalance is in micro-units (upc)
 // Returns true if balance is sufficient, false if check failed
 func waitForSufficientBalance(cfg config.Config, accountAddr string, evmAddr string, requiredBalance string, operationName string) bool {
-	p := getPrinter()
 	v := validator.NewWith(validator.Options{
 		BinPath:       findPchaind(),
 		HomeDir:       cfg.HomeDir,
@@ -225,7 +224,11 @@ func waitForSufficientBalance(cfg config.Config, accountAddr string, evmAddr str
 		GenesisDomain: cfg.GenesisDomain,
 		Denom:         cfg.Denom,
 	})
+	return waitForSufficientBalanceWith(v, getPrinter(), &ttyPrompter{}, accountAddr, evmAddr, requiredBalance, operationName)
+}
 
+// waitForSufficientBalanceWith is the testable version that accepts injected dependencies.
+func waitForSufficientBalanceWith(v validator.Service, p ui.Printer, prompter Prompter, accountAddr string, evmAddr string, requiredBalance string, operationName string) bool {
 	maxRetries := 10
 	for tries := 0; tries < maxRetries; tries++ {
 		balCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -278,25 +281,8 @@ func waitForSufficientBalance(cfg config.Config, accountAddr string, evmAddr str
 		fmt.Printf("or contact us at %s\n\n", p.Colors.Info("push.org/support"))
 
 		// Wait for user to press Enter
-		if !flagNonInteractive {
-			savedStdin := os.Stdin
-			var tty *os.File
-			if !term.IsTerminal(int(savedStdin.Fd())) {
-				if t, err := os.OpenFile("/dev/tty", os.O_RDONLY, 0); err == nil {
-					tty = t
-					os.Stdin = t
-				}
-			}
-			if tty != nil {
-				defer func() {
-					os.Stdin = savedStdin
-					tty.Close()
-				}()
-			}
-
-			reader := bufio.NewReader(os.Stdin)
-			fmt.Print(p.Colors.Apply(p.Colors.Theme.Prompt, "Press ENTER after funding..."))
-			_, _ = reader.ReadString('\n')
+		if prompter.IsInteractive() {
+			_, _ = prompter.ReadLine(p.Colors.Apply(p.Colors.Theme.Prompt, "Press ENTER after funding..."))
 			fmt.Println()
 		}
 	}

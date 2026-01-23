@@ -11,11 +11,9 @@ import (
     "github.com/charmbracelet/lipgloss"
     "github.com/pushchain/push-validator-cli/internal/config"
     "github.com/pushchain/push-validator-cli/internal/dashboard"
-    "github.com/pushchain/push-validator-cli/internal/node"
     "github.com/pushchain/push-validator-cli/internal/process"
     "github.com/pushchain/push-validator-cli/internal/metrics"
     ui "github.com/pushchain/push-validator-cli/internal/ui"
-    "github.com/pushchain/push-validator-cli/internal/validator"
 )
 
 // statusResult models the key process and RPC fields shown by the
@@ -73,7 +71,9 @@ type statusResult struct {
 
 // computeStatus gathers comprehensive status information including system metrics,
 // network details, and validator information.
-func computeStatus(cfg config.Config, sup process.Supervisor) statusResult {
+func computeStatus(d *Deps) statusResult {
+    cfg := d.Cfg
+    sup := d.Sup
     res := statusResult{}
     res.Running = sup.IsRunning()
     if pid, ok := sup.PID(); ok {
@@ -87,10 +87,14 @@ func computeStatus(cfg config.Config, sup process.Supervisor) statusResult {
     if u, err := url.Parse(rpc); err == nil && u.Host != "" { hostport = u.Host }
 
     // Check RPC listening with timeout
+    rpcCheck := d.RPCCheck
+    if rpcCheck == nil {
+        rpcCheck = process.IsRPCListening
+    }
     rpcCtx, rpcCancel := context.WithTimeout(context.Background(), 1*time.Second)
     rpcListeningDone := make(chan bool, 1)
     go func() {
-        rpcListeningDone <- process.IsRPCListening(hostport, 500*time.Millisecond)
+        rpcListeningDone <- rpcCheck(hostport, 500*time.Millisecond)
     }()
     select {
     case res.RPCListening = <-rpcListeningDone:
@@ -101,7 +105,7 @@ func computeStatus(cfg config.Config, sup process.Supervisor) statusResult {
     rpcCancel()
 
     if res.RPCListening {
-        cli := node.New(rpc)
+        cli := d.Node
         ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
         defer cancel()
         st, err := cli.Status(ctx)
@@ -115,7 +119,7 @@ func computeStatus(cfg config.Config, sup process.Supervisor) statusResult {
 
             // Fetch comprehensive validator details (best-effort, 3s timeout)
             valCtx, valCancel := context.WithTimeout(context.Background(), 3*time.Second)
-            myVal, _ := validator.GetCachedMyValidator(valCtx, cfg)
+            myVal, _ := d.Fetcher.GetMyValidator(valCtx, cfg)
             valCancel()
             res.IsValidator = myVal.IsValidator
             if myVal.IsValidator {
@@ -140,7 +144,7 @@ func computeStatus(cfg config.Config, sup process.Supervisor) statusResult {
 
                 // Fetch rewards (best-effort, 2s timeout)
                 rewardCtx, rewardCancel := context.WithTimeout(context.Background(), 2*time.Second)
-                commRewards, outRewards, _ := validator.GetCachedRewards(rewardCtx, cfg, myVal.Address)
+                commRewards, outRewards, _ := d.Fetcher.GetRewards(rewardCtx, cfg, myVal.Address)
                 rewardCancel()
                 res.CommissionRewards = commRewards
                 res.OutstandingRewards = outRewards
@@ -208,6 +212,20 @@ func computeStatus(cfg config.Config, sup process.Supervisor) statusResult {
     return res
 }
 
+// parseBinaryVersionOutput extracts the version string from pchaind version --long output.
+func parseBinaryVersionOutput(output []byte) string {
+    lines := strings.Split(string(output), "\n")
+    for _, line := range lines {
+        if strings.HasPrefix(strings.TrimSpace(line), "version") {
+            parts := strings.SplitN(line, ":", 2)
+            if len(parts) == 2 {
+                return strings.TrimSpace(parts[1])
+            }
+        }
+    }
+    return ""
+}
+
 // getBinaryVersion fetches the binary version string from pchaind
 func getBinaryVersion(cfg config.Config) string {
     ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -218,20 +236,7 @@ func getBinaryVersion(cfg config.Config) string {
     if err != nil {
         return ""
     }
-
-    // Parse version from output
-    // Format is usually "version: v0.x.x-..." on first line
-    lines := strings.Split(string(output), "\n")
-    for _, line := range lines {
-        if strings.HasPrefix(strings.TrimSpace(line), "version") {
-            parts := strings.SplitN(line, ":", 2)
-            if len(parts) == 2 {
-                return strings.TrimSpace(parts[1])
-            }
-        }
-    }
-
-    return ""
+    return parseBinaryVersionOutput(output)
 }
 
 // printStatusText prints a human-friendly status summary matching the dashboard layout.

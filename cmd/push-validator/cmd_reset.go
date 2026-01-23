@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"fmt"
 	"os"
 	"strings"
@@ -17,8 +16,14 @@ import (
 
 // handleReset stops the node (best-effort), clears chain data while
 // preserving the address book, and restarts the node. It emits JSON or text depending on --output.
-func handleReset(cfg config.Config, sup process.Supervisor) error {
+func handleReset(cfg config.Config, sup process.Supervisor, prompters ...Prompter) error {
 	p := getPrinter()
+	var prompter Prompter
+	if len(prompters) > 0 {
+		prompter = prompters[0]
+	} else {
+		prompter = &ttyPrompter{}
+	}
 
 	// Require confirmation for destructive operation
 	if flagOutput != "json" && !flagYes {
@@ -27,10 +32,8 @@ func handleReset(cfg config.Config, sup process.Supervisor) error {
 		}
 		fmt.Println(p.Colors.Warning(p.Colors.Emoji("⚠️") + "  This will reset all chain data (address book will be kept)"))
 		fmt.Println()
-		fmt.Print(p.Colors.Apply(p.Colors.Theme.Prompt, "Confirm reset? (y/N): "))
-		reader := bufio.NewReader(os.Stdin)
-		response, _ := reader.ReadString('\n')
-		if strings.ToLower(strings.TrimSpace(response)) != "y" {
+		response, err := prompter.ReadLine("Confirm reset? (y/N): ")
+		if err != nil || strings.ToLower(strings.TrimSpace(response)) != "y" {
 			fmt.Println(p.Colors.Info("Reset cancelled"))
 			return nil
 		}
@@ -116,8 +119,14 @@ func handleReset(cfg config.Config, sup process.Supervisor) error {
 
 // handleFullReset performs a complete reset, deleting ALL data including validator keys.
 // Requires explicit confirmation unless --yes flag is used.
-func handleFullReset(cfg config.Config, sup process.Supervisor) error {
+func handleFullReset(cfg config.Config, sup process.Supervisor, prompters ...Prompter) error {
 	p := getPrinter()
+	var prompter Prompter
+	if len(prompters) > 0 {
+		prompter = prompters[0]
+	} else {
+		prompter = &ttyPrompter{}
+	}
 
 	// Stop node first and verify it stopped
 	if sup.IsRunning() {
@@ -130,10 +139,8 @@ func handleFullReset(cfg config.Config, sup process.Supervisor) error {
 				return err
 			} else {
 				p.Warn(p.Colors.Emoji("⚠") + fmt.Sprintf(" Could not stop node: %v", err))
-				fmt.Print(p.Colors.Apply(p.Colors.Theme.Warning, "Continue with full reset anyway? (y/N): "))
-				reader := bufio.NewReader(os.Stdin)
-				response, _ := reader.ReadString('\n')
-				if strings.ToLower(strings.TrimSpace(response)) != "y" {
+				response, pErr := prompter.ReadLine("Continue with full reset anyway? (y/N): ")
+				if pErr != nil || strings.ToLower(strings.TrimSpace(response)) != "y" {
 					p.Info("Full reset cancelled")
 					return nil
 				}
@@ -162,12 +169,8 @@ func handleFullReset(cfg config.Config, sup process.Supervisor) error {
 			if flagNonInteractive {
 				return fmt.Errorf("full-reset requires confirmation: use --yes to confirm in non-interactive mode")
 			}
-			fmt.Print(p.Colors.Apply(p.Colors.Theme.Prompt, "Type 'yes' to confirm full reset: "))
-			reader := bufio.NewReader(os.Stdin)
-			response, _ := reader.ReadString('\n')
-			response = strings.TrimSpace(strings.ToLower(response))
-
-			if response != "yes" {
+			response, pErr := prompter.ReadLine("Type 'yes' to confirm full reset: ")
+			if pErr != nil || strings.TrimSpace(strings.ToLower(response)) != "yes" {
 				fmt.Println(p.Colors.Info("Full reset cancelled"))
 				return nil
 			}

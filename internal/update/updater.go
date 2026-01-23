@@ -15,14 +15,26 @@ import (
 	"strings"
 )
 
+// HTTPDoer matches *http.Client's Do method. Allows mocking HTTP in tests.
+type HTTPDoer interface {
+	Do(*http.Request) (*http.Response, error)
+}
+
 // Updater handles the update process
 type Updater struct {
 	CurrentVersion string
 	BinaryPath     string // Path to current executable
+	http           HTTPDoer
 }
 
-// NewUpdater creates an updater for the current binary
-func NewUpdater(currentVersion string) (*Updater, error) {
+// New creates an Updater with the default HTTP client.
+func New(currentVersion string) (*Updater, error) {
+	return NewWith(currentVersion, nil)
+}
+
+// NewWith creates an Updater with an injected HTTPDoer (for testing).
+// If h is nil, a default *http.Client with httpTimeout is used.
+func NewWith(currentVersion string, h HTTPDoer) (*Updater, error) {
 	execPath, err := os.Executable()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get executable path: %w", err)
@@ -34,15 +46,20 @@ func NewUpdater(currentVersion string) (*Updater, error) {
 		realPath = execPath
 	}
 
+	if h == nil {
+		h = &http.Client{Timeout: httpTimeout}
+	}
+
 	return &Updater{
 		CurrentVersion: currentVersion,
 		BinaryPath:     realPath,
+		http:           h,
 	}, nil
 }
 
 // Check compares current version with latest release
 func (u *Updater) Check() (*CheckResult, error) {
-	release, err := FetchLatestRelease()
+	release, err := u.FetchLatestRelease()
 	if err != nil {
 		return nil, err
 	}
@@ -63,7 +80,12 @@ type ProgressFunc func(downloaded, total int64)
 
 // Download fetches the binary archive
 func (u *Updater) Download(asset *Asset, progress ProgressFunc) ([]byte, error) {
-	resp, err := http.Get(asset.BrowserDownloadURL)
+	req, err := http.NewRequest("GET", asset.BrowserDownloadURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create download request: %w", err)
+	}
+
+	resp, err := u.http.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to download: %w", err)
 	}
@@ -115,7 +137,12 @@ func (u *Updater) VerifyChecksum(data []byte, release *Release, assetName string
 	}
 
 	// Download checksums.txt
-	resp, err := http.Get(checksumAsset.BrowserDownloadURL)
+	req, err := http.NewRequest("GET", checksumAsset.BrowserDownloadURL, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create checksum request: %w", err)
+	}
+
+	resp, err := u.http.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to download checksums: %w", err)
 	}

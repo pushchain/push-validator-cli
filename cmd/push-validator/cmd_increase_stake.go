@@ -1,33 +1,23 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"math/big"
-	"os"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/pushchain/push-validator-cli/internal/config"
 	"github.com/pushchain/push-validator-cli/internal/validator"
 )
 
 // handleIncreaseStake allows validators to increase their stake after registration
-func handleIncreaseStake(cfg config.Config) error {
-	v := validator.NewWith(validator.Options{
-		BinPath:       findPchaind(),
-		HomeDir:       cfg.HomeDir,
-		ChainID:       cfg.ChainID,
-		Keyring:       cfg.KeyringBackend,
-		GenesisDomain: cfg.GenesisDomain,
-		Denom:         cfg.Denom,
-	})
+func handleIncreaseStake(d *Deps) error {
+	cfg := d.Cfg
 
 	// Get validator info
 	valCtx, valCancel := context.WithTimeout(context.Background(), 20*time.Second)
-	myValInfo, valErr := validator.GetCachedMyValidator(valCtx, cfg)
+	myValInfo, valErr := d.Fetcher.GetMyValidator(valCtx, cfg)
 	valCancel()
 
 	if valErr != nil {
@@ -68,7 +58,7 @@ func handleIncreaseStake(cfg config.Config) error {
 
 	// Get and display EVM address
 	evmCtx, evmCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	evmAddr, evmErr := getEVMAddress(evmCtx, myValInfo.Address)
+	evmAddr, evmErr := getEVMAddress(evmCtx, myValInfo.Address, d.Runner)
 	evmCancel()
 	if evmErr == nil {
 		p.KeyValueLine("EVM Address", evmAddr, "dim")
@@ -81,7 +71,7 @@ func handleIncreaseStake(cfg config.Config) error {
 
 	// Convert validator operator address to account address
 	convCtx, convCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	accountAddr, convErr := convertValidatorToAccountAddress(convCtx, myValInfo.Address)
+	accountAddr, convErr := convertValidatorToAccountAddress(convCtx, myValInfo.Address, d.Runner)
 	convCancel()
 	if convErr != nil {
 		if flagOutput == "json" {
@@ -95,7 +85,7 @@ func handleIncreaseStake(cfg config.Config) error {
 
 	// Get account balance from Cosmos SDK
 	balCtx, balCancel := context.WithTimeout(context.Background(), 15*time.Second)
-	balance, balErr := v.Balance(balCtx, accountAddr)
+	balance, balErr := d.Validator.Balance(balCtx, accountAddr)
 	balCancel()
 
 	if balErr != nil {
@@ -149,46 +139,56 @@ func handleIncreaseStake(cfg config.Config) error {
 		return fmt.Errorf("insufficient balance")
 	}
 
-	// Prompt for delegation amount
-	reader := bufio.NewReader(os.Stdin)
-	minDelegatePC := 0.1
-	maxDelegatePCVal, _ := strconv.ParseFloat(fmt.Sprintf("%.6f", maxDelegatePC), 64)
-
+	// Determine delegation amount
 	delegationAmount := ""
-	for {
-		fmt.Printf("Enter amount to delegate (%.1f - %.1f PC): ", minDelegatePC, maxDelegatePCVal)
-		input, _ := reader.ReadString('\n')
-		input = strings.TrimSpace(input)
+	if !d.Prompter.IsInteractive() {
+		// In non-interactive mode, use max delegatable amount
+		delegationAmount = maxDelegatable.String()
+	} else {
+		// Prompt for delegation amount
+		minDelegatePC := 0.1
+		maxDelegatePCVal, _ := strconv.ParseFloat(fmt.Sprintf("%.6f", maxDelegatePC), 64)
 
-		if input == "" {
-			fmt.Println(p.Colors.Error(p.Colors.Emoji("⚠") + " Amount is required. Try again."))
-			continue
+		for {
+			input, err := d.Prompter.ReadLine(fmt.Sprintf("Enter amount to delegate (%.1f - %.1f PC): ", minDelegatePC, maxDelegatePCVal))
+			if err != nil {
+				// On read error, use max delegatable
+				delegateWei := new(big.Float).Mul(new(big.Float).SetInt(maxDelegatable), new(big.Float).SetFloat64(1))
+				delegationAmount = delegateWei.Text('f', 0)
+				break
+			}
+			input = strings.TrimSpace(input)
+
+			if input == "" {
+				fmt.Println(p.Colors.Error(p.Colors.Emoji("⚠") + " Amount is required. Try again."))
+				continue
+			}
+
+			// Parse user input
+			delegateAmount, parseErr := strconv.ParseFloat(input, 64)
+			if parseErr != nil {
+				fmt.Println(p.Colors.Error(p.Colors.Emoji("⚠") + " Invalid amount. Enter a number. Try again."))
+				continue
+			}
+
+			// Validate bounds
+			if delegateAmount < minDelegatePC {
+				fmt.Printf(p.Colors.Error(p.Colors.Emoji("⚠")+" Amount too low. Minimum delegation is %.1f PC. Try again.\n"), minDelegatePC)
+				continue
+			}
+			if delegateAmount > maxDelegatePCVal {
+				fmt.Printf(p.Colors.Error(p.Colors.Emoji("⚠")+" Insufficient balance. Maximum: %.1f PC. Try again.\n"), maxDelegatePCVal)
+				continue
+			}
+
+			// Convert to wei
+			delegateWei := new(big.Float).Mul(new(big.Float).SetFloat64(delegateAmount), new(big.Float).SetFloat64(1e18))
+			delegationAmount = delegateWei.Text('f', 0)
+
+			fmt.Printf(p.Colors.Success(p.Colors.Emoji("✓")+" Will delegate %.6f PC\n"), delegateAmount)
+			fmt.Println()
+			break
 		}
-
-		// Parse user input
-		delegateAmount, err := strconv.ParseFloat(input, 64)
-		if err != nil {
-			fmt.Println(p.Colors.Error(p.Colors.Emoji("⚠") + " Invalid amount. Enter a number. Try again."))
-			continue
-		}
-
-		// Validate bounds
-		if delegateAmount < minDelegatePC {
-			fmt.Printf(p.Colors.Error(p.Colors.Emoji("⚠") + " Amount too low. Minimum delegation is %.1f PC. Try again.\n"), minDelegatePC)
-			continue
-		}
-		if delegateAmount > maxDelegatePCVal {
-			fmt.Printf(p.Colors.Error(p.Colors.Emoji("⚠") + " Insufficient balance. Maximum: %.1f PC. Try again.\n"), maxDelegatePCVal)
-			continue
-		}
-
-		// Convert to wei
-		delegateWei := new(big.Float).Mul(new(big.Float).SetFloat64(delegateAmount), new(big.Float).SetFloat64(1e18))
-		delegationAmount = delegateWei.Text('f', 0)
-
-		fmt.Printf(p.Colors.Success(p.Colors.Emoji("✓") + " Will delegate %.6f PC\n"), delegateAmount)
-		fmt.Println()
-		break
 	}
 
 	// Auto-derive key name from validator
@@ -200,12 +200,12 @@ func handleIncreaseStake(cfg config.Config) error {
 		// We already have accountAddr from the balance check above, but need to recalculate
 		// in case that logic changes in the future
 		addrCtx, addrCancel := context.WithTimeout(context.Background(), 10*time.Second)
-		accountAddr, convErr := convertValidatorToAccountAddress(addrCtx, myValInfo.Address)
+		accountAddr, convErr := convertValidatorToAccountAddress(addrCtx, myValInfo.Address, d.Runner)
 		addrCancel()
 		if convErr == nil {
 			// Try to find the key in the keyring
 			keyCtx, keyCancel := context.WithTimeout(context.Background(), 10*time.Second)
-			foundKey, findErr := findKeyNameByAddress(keyCtx, cfg, accountAddr)
+			foundKey, findErr := findKeyNameByAddress(keyCtx, cfg, accountAddr, d.Runner)
 			keyCancel()
 			if findErr == nil {
 				keyName = foundKey
@@ -240,7 +240,7 @@ func handleIncreaseStake(cfg config.Config) error {
 	fmt.Println()
 
 	delegCtx, delegCancel := context.WithTimeout(context.Background(), 90*time.Second)
-	txHash, delegErr := v.Delegate(delegCtx, validator.DelegateArgs{
+	txHash, delegErr := d.Validator.Delegate(delegCtx, validator.DelegateArgs{
 		ValidatorAddress: myValInfo.Address,
 		Amount:           delegationAmount,
 		KeyName:          keyName,

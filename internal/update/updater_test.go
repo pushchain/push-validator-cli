@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -328,6 +329,7 @@ func TestVerifyChecksum(t *testing.T) {
 			u := &Updater{
 				CurrentVersion: "1.0.0",
 				BinaryPath:     "/usr/local/bin/push-validator",
+				http:           &http.Client{},
 			}
 
 			err := u.VerifyChecksum(testData, release, tt.assetName)
@@ -407,6 +409,7 @@ func TestDownload(t *testing.T) {
 			u := &Updater{
 				CurrentVersion: "1.0.0",
 				BinaryPath:     "/usr/local/bin/push-validator",
+				http:           &http.Client{},
 			}
 
 			data, err := u.Download(asset, nil)
@@ -441,6 +444,7 @@ func TestDownload_WithProgress(t *testing.T) {
 	u := &Updater{
 		CurrentVersion: "1.0.0",
 		BinaryPath:     "/usr/local/bin/push-validator",
+		http:           &http.Client{},
 	}
 
 	var progressCalls int
@@ -472,26 +476,66 @@ func TestDownload_WithProgress(t *testing.T) {
 }
 
 func TestCheck(t *testing.T) {
-	// Note: This test would require mocking FetchLatestRelease
-	// Since it uses hardcoded URLs, we'll create a simple test
-	// that verifies the Check method structure
+	tests := []struct {
+		name            string
+		currentVersion  string
+		latestTag       string
+		wantAvailable   bool
+		wantErr         bool
+	}{
+		{
+			name:           "update available",
+			currentVersion: "1.0.0",
+			latestTag:      "v2.0.0",
+			wantAvailable:  true,
+		},
+		{
+			name:           "already up to date",
+			currentVersion: "2.0.0",
+			latestTag:      "v2.0.0",
+			wantAvailable:  false,
+		},
+		{
+			name:           "dev version",
+			currentVersion: "dev",
+			latestTag:      "v1.0.0",
+			wantAvailable:  true,
+		},
+	}
 
-	t.Run("version comparison logic", func(t *testing.T) {
-		u := &Updater{
-			CurrentVersion: "1.0.0",
-			BinaryPath:     "/usr/local/bin/push-validator",
-		}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mock := &mockHTTPDoer{
+				doFunc: func(req *http.Request) (*http.Response, error) {
+					release := Release{TagName: tt.latestTag}
+					body, _ := json.Marshal(release)
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Body:       io.NopCloser(bytes.NewReader(body)),
+					}, nil
+				},
+			}
 
-		// Since Check() calls FetchLatestRelease() which uses hardcoded URLs,
-		// we cannot easily test it without refactoring or network access
-		// This is a structural test only
-		if u.CurrentVersion != "1.0.0" {
-			t.Errorf("CurrentVersion = %q, want %q", u.CurrentVersion, "1.0.0")
-		}
-		if u.BinaryPath != "/usr/local/bin/push-validator" {
-			t.Errorf("BinaryPath = %q, want %q", u.BinaryPath, "/usr/local/bin/push-validator")
-		}
-	})
+			u := &Updater{
+				CurrentVersion: tt.currentVersion,
+				BinaryPath:     "/usr/local/bin/push-validator",
+				http:           mock,
+			}
+
+			result, err := u.Check()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Check() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if err != nil {
+				return
+			}
+
+			if result.UpdateAvailable != tt.wantAvailable {
+				t.Errorf("Check() UpdateAvailable = %v, want %v", result.UpdateAvailable, tt.wantAvailable)
+			}
+		})
+	}
 }
 
 func TestInstall_ErrorCases(t *testing.T) {
@@ -593,6 +637,7 @@ func TestVerifyChecksum_DownloadError(t *testing.T) {
 	u := &Updater{
 		CurrentVersion: "1.0.0",
 		BinaryPath:     "/usr/local/bin/push-validator",
+		http:           &http.Client{},
 	}
 
 	err := u.VerifyChecksum([]byte("data"), release, "test.tar.gz")
@@ -629,6 +674,7 @@ func TestDownload_InvalidURL(t *testing.T) {
 	u := &Updater{
 		CurrentVersion: "1.0.0",
 		BinaryPath:     "/usr/local/bin/push-validator",
+		http:           &http.Client{},
 	}
 
 	_, err := u.Download(asset, nil)
@@ -703,6 +749,7 @@ func TestVerifyChecksum_EmptyFile(t *testing.T) {
 	u := &Updater{
 		CurrentVersion: "1.0.0",
 		BinaryPath:     "/usr/local/bin/push-validator",
+		http:           &http.Client{},
 	}
 
 	err := u.VerifyChecksum([]byte("data"), release, "test.tar.gz")
@@ -777,6 +824,7 @@ func TestDownload_ReadError(t *testing.T) {
 	u := &Updater{
 		CurrentVersion: "1.0.0",
 		BinaryPath:     "/usr/local/bin/push-validator",
+		http:           &http.Client{},
 	}
 
 	// Close server immediately to simulate connection error
@@ -829,6 +877,7 @@ func TestVerifyChecksum_MalformedChecksumLine(t *testing.T) {
 	u := &Updater{
 		CurrentVersion: "1.0.0",
 		BinaryPath:     "/usr/local/bin/push-validator",
+		http:           &http.Client{},
 	}
 
 	err := u.VerifyChecksum([]byte("data"), release, "test.tar.gz")
@@ -923,9 +972,9 @@ func TestCopyFile_DestinationWriteError(t *testing.T) {
 
 func TestNewUpdater(t *testing.T) {
 	currentVersion := "1.2.3"
-	u, err := NewUpdater(currentVersion)
+	u, err := New(currentVersion)
 	if err != nil {
-		t.Fatalf("NewUpdater() error = %v", err)
+		t.Fatalf("New() error = %v", err)
 	}
 
 	if u.CurrentVersion != currentVersion {

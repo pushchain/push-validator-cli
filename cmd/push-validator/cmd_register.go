@@ -1,12 +1,9 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"math/big"
-	"os"
-	"os/exec"
 	"strconv"
 	"strings"
 	"time"
@@ -14,7 +11,6 @@ import (
 	"github.com/pushchain/push-validator-cli/internal/config"
 	"github.com/pushchain/push-validator-cli/internal/node"
 	"github.com/pushchain/push-validator-cli/internal/validator"
-	"golang.org/x/term"
 )
 
 const (
@@ -34,12 +30,219 @@ const (
 	defaultMinSelfDelegation = "1"
 )
 
+// registrationInputs holds the collected registration parameters.
+type registrationInputs struct {
+	Moniker        string
+	KeyName        string
+	ImportMnemonic string
+	CommissionRate string
+	StakeAmount    string
+}
+
+// collectRegistrationInputs prompts for registration parameters interactively.
+// It uses the Prompter interface for testable I/O.
+func collectRegistrationInputs(d *Deps, defaults registrationInputs) (registrationInputs, error) {
+	result := defaults
+	prompter := d.Prompter
+
+	// Moniker prompt
+	if result.Moniker == "" || result.Moniker == "push-validator" {
+		input, err := prompter.ReadLine(fmt.Sprintf("Enter validator name (moniker) [%s]: ", defaults.Moniker))
+		if err == nil && input != "" {
+			result.Moniker = input
+		}
+	}
+
+	// Key name prompt
+	input, err := prompter.ReadLine(fmt.Sprintf("Enter key name for validator (default: %s): ", defaults.KeyName))
+	if err == nil && input != "" {
+		result.KeyName = input
+	}
+
+	// Check if key already exists
+	if keyExistsWithRunner(d.Cfg, result.KeyName, d.Runner) {
+		p := d.Printer
+		fmt.Println()
+		fmt.Println(p.Colors.Warning(p.Colors.Emoji("⚠") + fmt.Sprintf(" Key '%s' already exists.", result.KeyName)))
+		fmt.Println()
+		fmt.Println(p.Colors.Info("You can use this existing key or create a new one."))
+		fmt.Println(p.Colors.Apply(p.Colors.Theme.Description, "Note: Recovery mnemonics are only shown when creating new keys."))
+
+		newName, err := prompter.ReadLine("\nEnter a different key name (or press ENTER to use existing key): ")
+		if err == nil && newName != "" {
+			result.KeyName = newName
+			if !keyExistsWithRunner(d.Cfg, result.KeyName, d.Runner) {
+				result.ImportMnemonic = promptWalletChoiceWith(prompter)
+			}
+		} else {
+			fmt.Println()
+			fmt.Println(p.Colors.Success(p.Colors.Emoji("✓") + " Proceeding with existing key"))
+			fmt.Println()
+		}
+	} else {
+		result.ImportMnemonic = promptWalletChoiceWith(prompter)
+	}
+
+	// Commission rate prompt
+	result.CommissionRate = promptCommissionRate(prompter, defaults.CommissionRate)
+
+	return result, nil
+}
+
+// promptCommissionRate prompts for the commission rate and validates it.
+func promptCommissionRate(prompter Prompter, defaultRate string) string {
+	input, err := prompter.ReadLine("Enter commission rate (1-100%) [10]: ")
+	if err != nil || input == "" {
+		return defaultRate
+	}
+
+	rate, err := strconv.ParseFloat(input, 64)
+	if err != nil || rate < 1 || rate > 100 {
+		return defaultRate
+	}
+	return fmt.Sprintf("%.2f", rate/100)
+}
+
+// promptWalletChoiceWith prompts the user to choose between creating a new wallet or importing.
+// Returns the mnemonic if user chooses to import, empty string otherwise.
+func promptWalletChoiceWith(prompter Prompter) string {
+	fmt.Println()
+	fmt.Println("Wallet Setup")
+	fmt.Println("  [1] Create new wallet (generates new recovery phrase)")
+	fmt.Println("  [2] Import existing wallet (use your recovery phrase)")
+	fmt.Println()
+
+	choice, _ := prompter.ReadLine("Choose option [1]: ")
+
+	if choice != "2" {
+		return ""
+	}
+
+	fmt.Println()
+	fmt.Println("Enter your recovery mnemonic phrase (12 or 24 words):")
+
+	mnemonic, err := prompter.ReadLine("> ")
+	if err != nil {
+		return ""
+	}
+
+	// Normalize the mnemonic
+	mnemonic = strings.TrimSpace(mnemonic)
+	mnemonic = strings.Join(strings.Fields(mnemonic), " ")
+	mnemonic = strings.ToLower(mnemonic)
+
+	if err := validator.ValidateMnemonic(mnemonic); err != nil {
+		fmt.Printf("Invalid mnemonic: %v\n", err)
+		return ""
+	}
+
+	fmt.Println("Mnemonic format validated")
+	return mnemonic
+}
+
+// selectStakeAmount prompts for and validates the stake amount.
+// Returns the stake in wei. If prompter is non-interactive or balance is empty, returns minStake.
+func selectStakeAmount(prompter Prompter, balance string) (string, error) {
+	if balance == "" {
+		return registrationMinStake, nil
+	}
+
+	balInt := new(big.Int)
+	balInt.SetString(balance, 10)
+	feeInt := new(big.Int)
+	feeInt.SetString(registrationFeeReserve, 10)
+	maxStakeable := new(big.Int).Sub(balInt, feeInt)
+
+	minStakeInt := new(big.Int)
+	minStakeInt.SetString(registrationMinStake, 10)
+
+	if !prompter.IsInteractive() {
+		return maxStakeable.String(), nil
+	}
+
+	divisor := new(big.Float).SetFloat64(1e18)
+	maxStakeFloat, _ := new(big.Float).SetString(maxStakeable.String())
+	maxPC := new(big.Float).Quo(maxStakeFloat, divisor)
+
+	for {
+		minStakePC := 1.5
+		maxStakePC, _ := strconv.ParseFloat(fmt.Sprintf("%.6f", maxPC), 64)
+
+		input, err := prompter.ReadLine(fmt.Sprintf("Enter stake amount (%.1f - %.1f PC) [%.1f]: ", minStakePC, maxStakePC, maxStakePC))
+		if err != nil || input == "" {
+			return maxStakeable.String(), nil
+		}
+
+		stakeAmount, err := strconv.ParseFloat(input, 64)
+		if err != nil {
+			fmt.Println("Invalid amount. Enter a number. Try again.")
+			continue
+		}
+
+		if stakeAmount < minStakePC {
+			fmt.Printf("Amount too low. Minimum stake is %.1f PC. Try again.\n", minStakePC)
+			continue
+		}
+		if stakeAmount > maxStakePC {
+			fmt.Printf("Insufficient balance. Maximum: %.1f PC. Try again.\n", maxStakePC)
+			continue
+		}
+
+		stakeWei := new(big.Float).Mul(new(big.Float).SetFloat64(stakeAmount), new(big.Float).SetFloat64(1e18))
+		return stakeWei.Text('f', 0), nil
+	}
+}
+
+// waitForFunding polls the validator's balance until it meets the required amount.
+// Returns the final balance in wei, or error if max retries exceeded.
+func waitForFunding(v validator.Service, prompter Prompter, address string, maxRetries int) (string, error) {
+	for tries := 0; tries < maxRetries; {
+		balCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		bal, err := v.Balance(balCtx, address)
+		cancel()
+		if err != nil {
+			fmt.Printf("Balance check failed: %v\n", err)
+			tries++
+			time.Sleep(2 * time.Second)
+			continue
+		}
+
+		balInt := new(big.Int)
+		balInt.SetString(bal, 10)
+		reqInt := new(big.Int)
+		reqInt.SetString(registrationRequiredBalance, 10)
+		if balInt.Cmp(reqInt) >= 0 {
+			return bal, nil
+		}
+
+		// Display balance info
+		pcAmount := "0.000000"
+		if bal != "0" {
+			balFloat, _ := new(big.Float).SetString(bal)
+			divisor := new(big.Float).SetFloat64(1e18)
+			result := new(big.Float).Quo(balFloat, divisor)
+			pcAmount = fmt.Sprintf("%.6f", result)
+		}
+
+		fmt.Printf("Current Balance: %s PC (need 1.6 PC)\n", pcAmount)
+		fmt.Println("Please send at least 1.6 PC to the EVM address shown above.")
+
+		if prompter.IsInteractive() {
+			_, _ = prompter.ReadLine("Press ENTER after funding...")
+		} else {
+			tries++
+			time.Sleep(2 * time.Second)
+		}
+	}
+	return "", fmt.Errorf("insufficient balance after %d retries", maxRetries)
+}
+
 var flagRegisterCheckOnly bool
 
-// handleRegisterValidator is a compatibility wrapper that pulls
-// defaults from env and invokes runRegisterValidator.
+// handleRegisterValidator is the main entry point for registration.
 // It prompts interactively for moniker and key name if not set via env vars.
-func handleRegisterValidator(cfg config.Config) error {
+func handleRegisterValidator(d *Deps) error {
+	cfg := d.Cfg
 	// Get defaults from env or use hardcoded fallbacks
 	defaultMoniker := getenvDefault("MONIKER", "push-validator")
 	defaultKeyName := getenvDefault("KEY_NAME", "validator-key")
@@ -47,19 +250,9 @@ func handleRegisterValidator(cfg config.Config) error {
 
 	moniker := defaultMoniker
 	keyName := defaultKeyName
-	var importMnemonic string // Will hold mnemonic if user chooses to import
-
-	v := validator.NewWith(validator.Options{
-		BinPath:       findPchaind(),
-		HomeDir:       cfg.HomeDir,
-		ChainID:       cfg.ChainID,
-		Keyring:       cfg.KeyringBackend,
-		GenesisDomain: cfg.GenesisDomain,
-		Denom:         cfg.Denom,
-	})
 
 	statusCtx, statusCancel := context.WithTimeout(context.Background(), 20*time.Second)
-	isValAlready, statusErr := v.IsValidator(statusCtx, "")
+	isValAlready, statusErr := d.Validator.IsValidator(statusCtx, "")
 	statusCancel()
 	if statusErr != nil {
 		if flagOutput == "json" {
@@ -111,7 +304,7 @@ func handleRegisterValidator(cfg config.Config) error {
 
 	// Check for moniker conflicts before prompting for registration
 	monikerCheckCtx, monikerCheckCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	myValInfo, monikerErr := validator.GetCachedMyValidator(monikerCheckCtx, cfg)
+	myValInfo, monikerErr := d.Fetcher.GetMyValidator(monikerCheckCtx, cfg)
 	monikerCheckCancel()
 	if monikerErr == nil && myValInfo.ValidatorExistsWithSameMoniker {
 		if flagOutput == "json" {
@@ -137,206 +330,66 @@ func handleRegisterValidator(cfg config.Config) error {
 	}
 
 	// Interactive prompts (skip in JSON mode or if env vars are explicitly set)
-	if flagOutput != "json" {
-		savedStdin := os.Stdin
-		var tty *os.File
-		if !flagNonInteractive && !term.IsTerminal(int(savedStdin.Fd())) {
-			if t, err := os.OpenFile("/dev/tty", os.O_RDONLY, 0); err == nil {
-				tty = t
-				os.Stdin = t
-			}
+	if flagOutput != "json" && d.Prompter.IsInteractive() {
+		defaults := registrationInputs{
+			Moniker:        moniker,
+			KeyName:        keyName,
+			CommissionRate: defaultCommissionRate,
 		}
-		if tty != nil {
-			defer func() {
-				os.Stdin = savedStdin
-				_ = tty.Close()
-			}()
+		inputs, err := collectRegistrationInputs(d, defaults)
+		if err != nil {
+			return err
 		}
-
-		reader := bufio.NewReader(os.Stdin)
-
-		if os.Getenv("MONIKER") == "" {
-			fmt.Printf("Enter validator name (moniker) [%s]: ", defaultMoniker)
-			input, _ := reader.ReadString('\n')
-			input = strings.TrimSpace(input)
-			if input != "" {
-				moniker = input
-			}
-			fmt.Println()
-		}
-
-		if os.Getenv("KEY_NAME") == "" {
-			fmt.Printf("Enter key name for validator (default: %s): ", defaultKeyName)
-			input, _ := reader.ReadString('\n')
-			input = strings.TrimSpace(input)
-			if input != "" {
-				keyName = input
-			}
-
-			// Check if key already exists
-			if keyExists(cfg, keyName) {
-				p := getPrinter()
-				fmt.Println()
-				fmt.Println(p.Colors.Warning(p.Colors.Emoji("⚠") + fmt.Sprintf(" Key '%s' already exists.", keyName)))
-				fmt.Println()
-				fmt.Println(p.Colors.Info("You can use this existing key or create a new one."))
-				fmt.Println(p.Colors.Apply(p.Colors.Theme.Description, "Note: Recovery mnemonics are only shown when creating new keys."))
-				fmt.Printf("\nEnter a different key name (or press ENTER to use existing key): ")
-				newName, _ := reader.ReadString('\n')
-				newName = strings.TrimSpace(newName)
-				if newName != "" {
-					keyName = newName
-					// Check if new key name also exists, if not, show wallet choice
-					if !keyExists(cfg, keyName) {
-						importMnemonic = promptWalletChoice(reader)
-					}
-				} else {
-					// User chose to reuse existing key
-					fmt.Println()
-					fmt.Println(p.Colors.Success(p.Colors.Emoji("✓") + " Proceeding with existing key"))
-					fmt.Println()
-				}
-			} else {
-				// Key doesn't exist - prompt for wallet creation method
-				importMnemonic = promptWalletChoice(reader)
-			}
-			fmt.Println()
-		}
-
-		// Commission rate prompt (only if not already registered)
-		var commissionRate string
-		if os.Getenv("COMMISSION_RATE") == "" {
-			p := getPrinter()
-			fmt.Printf("Enter commission rate (1-100%%) [10]: ")
-			input, _ := reader.ReadString('\n')
-			input = strings.TrimSpace(input)
-
-			if input == "" {
-				commissionRate = defaultCommissionRate // Default 10%
-			} else {
-				// Parse and validate
-				rate, err := strconv.ParseFloat(input, 64)
-				if err != nil || rate < 1 || rate > 100 {
-					fmt.Println(p.Colors.Error(p.Colors.Emoji("⚠") + " Invalid commission rate. Using default 10%"))
-					commissionRate = defaultCommissionRate
-				} else {
-					// Convert percentage to decimal (e.g., 15 -> 0.15)
-					commissionRate = fmt.Sprintf("%.2f", rate/100)
-				}
-			}
-			fmt.Println()
-		} else {
-			commissionRate = getenvDefault("COMMISSION_RATE", defaultCommissionRate)
-		}
-
 		// Interactive mode - let user choose stake amount
 		// Pass empty string to trigger the interactive stake selection prompt
-		return runRegisterValidator(cfg, moniker, keyName, "", commissionRate, importMnemonic)
-	} else {
-		// JSON mode or env vars set - use default/env amount
-		commissionRate := getenvDefault("COMMISSION_RATE", defaultCommissionRate)
-		return runRegisterValidator(cfg, moniker, keyName, defaultAmount, commissionRate, "")
+		return runRegisterValidatorWithDeps(d, cfg, inputs.Moniker, inputs.KeyName, "", inputs.CommissionRate, inputs.ImportMnemonic)
 	}
+	// JSON mode or non-interactive - use default/env amount
+	commissionRate := getenvDefault("COMMISSION_RATE", defaultCommissionRate)
+	return runRegisterValidatorWithDeps(d, cfg, moniker, keyName, defaultAmount, commissionRate, "")
 }
 
-// keyExists checks if a key with the given name already exists in the keyring
-func keyExists(cfg config.Config, keyName string) bool {
+// keyExistsWithRunner checks if a key with the given name already exists in the keyring
+// using the provided CommandRunner for testability.
+func keyExistsWithRunner(cfg config.Config, keyName string, runner CommandRunner) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, findPchaind(), "keys", "show", keyName, "-a",
+	_, err := runner.Run(ctx, findPchaind(), "keys", "show", keyName, "-a",
 		"--keyring-backend", cfg.KeyringBackend, "--home", cfg.HomeDir)
-	err := cmd.Run()
 	return err == nil
 }
 
-// promptWalletChoice prompts the user to choose between creating a new wallet or importing an existing one.
-// Returns the mnemonic if user chooses to import, empty string otherwise.
-func promptWalletChoice(reader *bufio.Reader) string {
-	p := getPrinter()
 
-	fmt.Println()
-	fmt.Println(p.Colors.Info("Wallet Setup"))
-	fmt.Println(p.Colors.Separator(40))
-	fmt.Println()
-	fmt.Println("  [1] Create new wallet (generates new recovery phrase)")
-	fmt.Println("  [2] Import existing wallet (use your recovery phrase)")
-	fmt.Println()
-	fmt.Print("Choose option [1]: ")
+// runRegisterValidatorWithDeps is the testable version that accepts
+// injected dependencies. If d is nil, production dependencies are created.
+func runRegisterValidatorWithDeps(d *Deps, cfg config.Config, moniker, keyName, amount, commissionRate, importMnemonic string) error {
+	// Use injected deps or create production ones
+	var nodeClient node.Client
+	var remoteClient node.Client
+	var v validator.Service
+	var prompter Prompter
 
-	choice, _ := reader.ReadString('\n')
-	choice = strings.TrimSpace(choice)
-
-	if choice != "2" {
-		// Default to creating new wallet
-		return ""
-	}
-
-	// User chose to import
-	fmt.Println()
-	fmt.Println(p.Colors.Info("Enter your recovery mnemonic phrase (12 or 24 words):"))
-	fmt.Println(p.Colors.Apply(p.Colors.Theme.Description, "(Words should be separated by spaces)"))
-	fmt.Println()
-	fmt.Print("> ")
-
-	mnemonic, err := reader.ReadString('\n')
-	if err != nil {
-		fmt.Println(p.Colors.Error(fmt.Sprintf("Error reading input: %v", err)))
-		return ""
-	}
-
-	// Normalize the mnemonic
-	mnemonic = strings.TrimSpace(mnemonic)
-	mnemonic = strings.Join(strings.Fields(mnemonic), " ") // Normalize whitespace
-	mnemonic = strings.ToLower(mnemonic)                   // Convert to lowercase
-
-	// Validate mnemonic format
-	if err := validator.ValidateMnemonic(mnemonic); err != nil {
-		fmt.Println()
-		fmt.Println(p.Colors.Error(fmt.Sprintf("Invalid mnemonic: %v", err)))
-		fmt.Println()
-		return ""
-	}
-
-	fmt.Println()
-	fmt.Println(p.Colors.Success(p.Colors.Emoji("✓") + " Mnemonic format validated"))
-
-	return mnemonic
-}
-
-// runRegisterValidator performs the end-to-end registration flow:
-// - verify node is not catching up
-// - ensure key exists (or import from mnemonic)
-// - wait for funding if necessary
-// - submit create-validator transaction
-// It prints text or JSON depending on --output.
-// If importMnemonic is non-empty, the key will be imported from that mnemonic instead of creating a new one.
-func runRegisterValidator(cfg config.Config, moniker, keyName, amount, commissionRate, importMnemonic string) error {
-	savedStdin := os.Stdin
-	var tty *os.File
-	if !flagNonInteractive && !term.IsTerminal(int(savedStdin.Fd())) {
-		if t, err := os.OpenFile("/dev/tty", os.O_RDONLY, 0); err == nil {
-			tty = t
-			os.Stdin = t
+	if d != nil {
+		nodeClient = d.Node
+		remoteClient = d.RemoteNode
+		v = d.Validator
+		prompter = d.Prompter
+	} else {
+		local := strings.TrimRight(cfg.RPCLocal, "/")
+		if local == "" {
+			local = "http://127.0.0.1:26657"
 		}
-	}
-	if tty != nil {
-		defer func() {
-			os.Stdin = savedStdin
-			_ = tty.Close()
-		}()
+		remoteHTTP := cfg.RemoteRPCURL()
+		nodeClient = node.New(local)
+		remoteClient = node.New(remoteHTTP)
+		v = validator.NewWith(validator.Options{BinPath: findPchaind(), HomeDir: cfg.HomeDir, ChainID: cfg.ChainID, Keyring: cfg.KeyringBackend, GenesisDomain: cfg.GenesisDomain, Denom: cfg.Denom})
+		prompter = &ttyPrompter{}
 	}
 
-	local := strings.TrimRight(cfg.RPCLocal, "/")
-	if local == "" {
-		local = "http://127.0.0.1:26657"
-	}
-	remoteHTTP := cfg.RemoteRPCURL()
-	cliLocal := node.New(local)
-	cliRemote := node.New(remoteHTTP)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	stLocal, err1 := cliLocal.Status(ctx)
-	_, err2 := cliRemote.RemoteStatus(ctx, remoteHTTP)
+	stLocal, err1 := nodeClient.Status(ctx)
+	_, err2 := remoteClient.RemoteStatus(ctx, cfg.RemoteRPCURL())
 	if err1 == nil && err2 == nil {
 		if stLocal.CatchingUp {
 			if flagOutput == "json" {
@@ -347,7 +400,6 @@ func runRegisterValidator(cfg config.Config, moniker, keyName, amount, commissio
 			return fmt.Errorf("node is still syncing")
 		}
 	}
-	v := validator.NewWith(validator.Options{BinPath: findPchaind(), HomeDir: cfg.HomeDir, ChainID: cfg.ChainID, Keyring: cfg.KeyringBackend, GenesisDomain: cfg.GenesisDomain, Denom: cfg.Denom})
 	ctx2, cancel2 := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel2()
 
@@ -422,125 +474,25 @@ func runRegisterValidator(cfg config.Config, moniker, keyName, amount, commissio
 		p.KeyValueLine("Cosmos Address", keyInfo.Address, "dim")
 		fmt.Println()
 	}
-	maxRetries := 10
-	var finalBalance string
 
-	for tries := 0; tries < maxRetries; {
-		balCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		bal, err := v.Balance(balCtx, keyInfo.Address)
-		cancel()
-		if err != nil {
-			fmt.Printf(p.Colors.Emoji("⚠️") + " Balance check failed: %v\n", err)
-			tries++
-			time.Sleep(2 * time.Second)
-			continue
+	// Wait for funding
+	finalBalance, fundingErr := waitForFunding(v, prompter, keyInfo.Address, 10)
+	if fundingErr != nil {
+		if flagOutput == "json" {
+			getPrinter().JSON(map[string]any{"ok": false, "error": fundingErr.Error()})
 		}
-		balInt := new(big.Int)
-		balInt.SetString(bal, 10)
-		reqInt := new(big.Int)
-		reqInt.SetString(registrationRequiredBalance, 10)
-		if balInt.Cmp(reqInt) >= 0 {
-			fmt.Println(p.Colors.Success(p.Colors.Emoji("✅") + " Sufficient balance"))
-			finalBalance = bal
-			break
-		}
-		pcAmount := "0.000000"
-		if bal != "0" {
-			balFloat, _ := new(big.Float).SetString(bal)
-			divisor := new(big.Float).SetFloat64(1e18)
-			result := new(big.Float).Quo(balFloat, divisor)
-			pcAmount = fmt.Sprintf("%.6f", result)
-		}
-
-		// Display funding information with breakdown
-		p.KeyValueLine("Current Balance", pcAmount+" PC", "yellow")
-		p.KeyValueLine("Min Stake Required", "1.5 PC", "yellow")
-		p.KeyValueLine("Gas Reserve", "0.1 PC", "yellow")
-		p.KeyValueLine("Total Required", "1.6 PC", "yellow")
-		fmt.Println()
-		fmt.Printf("Please send at least %s to the EVM address shown above.\n", p.Colors.Warning("1.6 PC"))
-		fmt.Printf("(Minimum 1.5 PC for staking + 0.1 PC for transaction fees)\n")
-		fmt.Printf("You can stake more than 1.5 PC if desired.\n\n")
-		fmt.Printf("Use faucet at %s for testnet validators\n", p.Colors.Info("https://faucet.push.org"))
-		fmt.Printf("or contact us at %s\n\n", p.Colors.Info("push.org/support"))
-
-		fmt.Print(p.Colors.Apply(p.Colors.Theme.Prompt, "Press ENTER after funding..."))
-		reader := bufio.NewReader(os.Stdin)
-		_, _ = reader.ReadString('\n')
+		return fundingErr
 	}
+	fmt.Println(p.Colors.Success(p.Colors.Emoji("✅") + " Sufficient balance"))
 
 	// Interactive stake amount selection
 	stake := amount
-	if stake == "" && flagOutput != "json" {
-		// Calculate max stakeable amount (balance - fee reserve)
-		balInt := new(big.Int)
-		balInt.SetString(finalBalance, 10)
-		feeInt := new(big.Int)
-		feeInt.SetString(registrationFeeReserve, 10)
-		maxStakeable := new(big.Int).Sub(balInt, feeInt)
-
-		minStakeInt := new(big.Int)
-		minStakeInt.SetString(registrationMinStake, 10)
-
-		// Display balance and staking range
-		fmt.Println()
-		balFloat, _ := new(big.Float).SetString(finalBalance)
-		divisor := new(big.Float).SetFloat64(1e18)
-		balPC := new(big.Float).Quo(balFloat, divisor)
-
-		maxStakeFloat, _ := new(big.Float).SetString(maxStakeable.String())
-		maxPC := new(big.Float).Quo(maxStakeFloat, divisor)
-
-		p.KeyValueLine("Current Balance", fmt.Sprintf("%.6f", balPC)+" PC", "blue")
-		p.KeyValueLine("Available to Stake", fmt.Sprintf("%.6f", maxPC)+" PC", "blue")
-		p.KeyValueLine("Reserved for Fees", "0.1 PC", "dim")
-		fmt.Println()
-
-		// Prompt for stake amount with validation loop
-		reader := bufio.NewReader(os.Stdin)
-		for {
-			minStakePC := 1.5
-			maxStakePC, _ := strconv.ParseFloat(fmt.Sprintf("%.6f", maxPC), 64)
-
-			fmt.Printf("Enter stake amount (%.1f - %.1f PC) [%.1f]: ", minStakePC, maxStakePC, maxStakePC)
-			input, _ := reader.ReadString('\n')
-			input = strings.TrimSpace(input)
-
-			// Default to maximum stakeable amount if empty
-			if input == "" {
-				stake = maxStakeable.String()
-				fmt.Printf(p.Colors.Success(p.Colors.Emoji("✓") + " Will stake %.6f PC\n"), maxStakePC)
-				fmt.Println()
-				break
-			}
-
-			// Parse user input
-			stakeAmount, err := strconv.ParseFloat(input, 64)
-			if err != nil {
-				fmt.Println(p.Colors.Error(p.Colors.Emoji("⚠") + " Invalid amount. Enter a number. Try again."))
-				continue
-			}
-
-			// Validate bounds
-			if stakeAmount < minStakePC {
-				fmt.Printf(p.Colors.Error(p.Colors.Emoji("⚠") + " Amount too low. Minimum stake is %.1f PC. Try again.\n"), minStakePC)
-				continue
-			}
-			if stakeAmount > maxStakePC {
-				fmt.Printf(p.Colors.Error(p.Colors.Emoji("⚠") + " Insufficient balance. Maximum: %.1f PC. Try again.\n"), maxStakePC)
-				continue
-			}
-
-			// Convert to wei
-			stakeWei := new(big.Float).Mul(new(big.Float).SetFloat64(stakeAmount), new(big.Float).SetFloat64(1e18))
-			stake = stakeWei.Text('f', 0)
-
-			fmt.Printf(p.Colors.Success(p.Colors.Emoji("✓") + " Will stake %.6f PC\n"), stakeAmount)
-			fmt.Println()
-			break
+	if stake == "" {
+		var stakeErr error
+		stake, stakeErr = selectStakeAmount(prompter, finalBalance)
+		if stakeErr != nil {
+			return stakeErr
 		}
-	} else if stake == "" {
-		stake = registrationMinStake
 	}
 	// Create fresh context for registration transaction (independent of earlier operations)
 	regCtx, regCancel := context.WithTimeout(context.Background(), 90*time.Second)

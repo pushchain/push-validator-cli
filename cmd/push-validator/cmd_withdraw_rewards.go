@@ -1,19 +1,13 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"fmt"
-	"os"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/pushchain/push-validator-cli/internal/config"
 	"github.com/pushchain/push-validator-cli/internal/dashboard"
-	"github.com/pushchain/push-validator-cli/internal/node"
-	"github.com/pushchain/push-validator-cli/internal/validator"
-	"golang.org/x/term"
 )
 
 // handleWithdrawRewards orchestrates the withdraw rewards flow:
@@ -24,8 +18,9 @@ import (
 // - ask about including commission
 // - submit withdraw transaction
 // - display results
-func handleWithdrawRewards(cfg config.Config) error {
+func handleWithdrawRewards(d *Deps) error {
 	p := getPrinter()
+	cfg := d.Cfg
 
 	// Step 1: Check sync status
 	if flagOutput != "json" {
@@ -33,17 +28,9 @@ func handleWithdrawRewards(cfg config.Config) error {
 		fmt.Print(p.Colors.Apply(p.Colors.Theme.Prompt, p.Colors.Emoji("🔍")+" Checking node sync status..."))
 	}
 
-	local := strings.TrimRight(cfg.RPCLocal, "/")
-	if local == "" {
-		local = "http://127.0.0.1:26657"
-	}
-	remoteHTTP := cfg.RemoteRPCURL()
-	cliLocal := node.New(local)
-	cliRemote := node.New(remoteHTTP)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	stLocal, err1 := cliLocal.Status(ctx)
-	_, err2 := cliRemote.RemoteStatus(ctx, remoteHTTP)
+	stLocal, err1 := d.Node.Status(ctx)
+	_, err2 := d.RemoteNode.RemoteStatus(ctx, cfg.RemoteRPCURL())
 	cancel()
 
 	if err1 != nil || err2 != nil {
@@ -83,7 +70,7 @@ func handleWithdrawRewards(cfg config.Config) error {
 	}
 
 	ctx2, cancel2 := context.WithTimeout(context.Background(), 10*time.Second)
-	myVal, statusErr := validator.GetCachedMyValidator(ctx2, cfg)
+	myVal, statusErr := d.Fetcher.GetMyValidator(ctx2, cfg)
 	cancel2()
 
 	if statusErr != nil {
@@ -121,7 +108,7 @@ func handleWithdrawRewards(cfg config.Config) error {
 	}
 
 	ctx3, cancel3 := context.WithTimeout(context.Background(), 5*time.Second)
-	commission, outstanding, rewardsErr := validator.GetValidatorRewards(ctx3, cfg, myVal.Address)
+	commission, outstanding, rewardsErr := d.Fetcher.GetRewards(ctx3, cfg, myVal.Address)
 	cancel3()
 
 	if flagOutput != "json" {
@@ -157,31 +144,20 @@ func handleWithdrawRewards(cfg config.Config) error {
 	// Warn if rewards are minimal
 	if !hasSignificantRewards && rewardsErr == nil {
 		fmt.Println(p.Colors.Warning(p.Colors.Emoji("⚠️") + " No significant rewards available (less than 0.01 PC)"))
-		if !flagNonInteractive {
-			savedStdin := os.Stdin
-			var tty *os.File
-			if !term.IsTerminal(int(savedStdin.Fd())) {
-				if t, err := os.OpenFile("/dev/tty", os.O_RDONLY, 0); err == nil {
-					tty = t
-					os.Stdin = t
-				}
+		if d.Prompter.IsInteractive() {
+			input, err := d.Prompter.ReadLine("Continue with withdrawal anyway? (y/N): ")
+			if err != nil {
+				fmt.Println()
+				fmt.Println(p.Colors.Info("Withdrawal cancelled."))
+				fmt.Println()
+				return nil
 			}
-			if tty != nil {
-				defer func() {
-					os.Stdin = savedStdin
-					tty.Close()
-				}()
-			}
-
-			reader := bufio.NewReader(os.Stdin)
-			fmt.Print("Continue with withdrawal anyway? (y/N): ")
-			input, _ := reader.ReadString('\n')
-			input = strings.TrimSpace(strings.ToLower(input))
+			input = strings.ToLower(input)
 			if input != "y" && input != "yes" {
 				fmt.Println()
 				fmt.Println(p.Colors.Info("Withdrawal cancelled."))
 				fmt.Println()
-					return nil
+				return nil
 			}
 			fmt.Println()
 		} else {
@@ -200,12 +176,12 @@ func handleWithdrawRewards(cfg config.Config) error {
 	if myVal.Address != "" {
 		// Convert validator address to account address
 		addrCtx, addrCancel := context.WithTimeout(context.Background(), 10*time.Second)
-		accountAddr, convErr := convertValidatorToAccountAddress(addrCtx, myVal.Address)
+		accountAddr, convErr := convertValidatorToAccountAddress(addrCtx, myVal.Address, d.Runner)
 		addrCancel()
 		if convErr == nil {
 			// Try to find the key in the keyring
 			keyCtx, keyCancel := context.WithTimeout(context.Background(), 10*time.Second)
-			foundKey, findErr := findKeyNameByAddress(keyCtx, cfg, accountAddr)
+			foundKey, findErr := findKeyNameByAddress(keyCtx, cfg, accountAddr, d.Runner)
 			keyCancel()
 			if findErr == nil {
 				keyName = foundKey
@@ -226,31 +202,10 @@ func handleWithdrawRewards(cfg config.Config) error {
 	}
 
 	// Only prompt if explicitly requested via env or interactive mode AND key derivation failed
-	if flagOutput != "json" && !flagNonInteractive && keyName == defaultKeyName && os.Getenv("KEY_NAME") == "" {
-		// Interactive prompt for key name
-		savedStdin := os.Stdin
-		var tty *os.File
-		if !term.IsTerminal(int(savedStdin.Fd())) {
-			if t, err := os.OpenFile("/dev/tty", os.O_RDONLY, 0); err == nil {
-				tty = t
-				os.Stdin = t
-			}
-		}
-		if tty != nil {
-			defer func() {
-				os.Stdin = savedStdin
-				tty.Close()
-			}()
-		}
-
-		reader := bufio.NewReader(os.Stdin)
-		fmt.Printf("\nEnter key name for withdrawal [%s]: ", defaultKeyName)
-		input, _ := reader.ReadString('\n')
-		input = strings.TrimSpace(input)
-		if input != "" {
+	if flagOutput != "json" && d.Prompter.IsInteractive() && keyName == defaultKeyName && getenvDefault("KEY_NAME", "") == "" {
+		input, err := d.Prompter.ReadLine(fmt.Sprintf("\nEnter key name for withdrawal [%s]: ", defaultKeyName))
+		if err == nil && input != "" {
 			keyName = input
-		} else {
-			keyName = defaultKeyName
 		}
 		fmt.Println()
 	}
@@ -262,7 +217,7 @@ func handleWithdrawRewards(cfg config.Config) error {
 
 	// Convert validator address to account address for balance check
 	balAddrCtx, balAddrCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	accountAddr, addrErr := convertValidatorToAccountAddress(balAddrCtx, myVal.Address)
+	accountAddr, addrErr := convertValidatorToAccountAddress(balAddrCtx, myVal.Address, d.Runner)
 	balAddrCancel()
 	if addrErr != nil {
 		if flagOutput == "json" {
@@ -277,7 +232,7 @@ func handleWithdrawRewards(cfg config.Config) error {
 
 	// Get EVM address for display
 	evmCtx2, evmCancel2 := context.WithTimeout(context.Background(), 10*time.Second)
-	evmAddr, evmErr := getEVMAddress(evmCtx2, accountAddr)
+	evmAddr, evmErr := getEVMAddress(evmCtx2, accountAddr, d.Runner)
 	evmCancel2()
 	if evmErr != nil {
 		evmAddr = "" // Not critical, we can proceed without EVM address
@@ -297,27 +252,12 @@ func handleWithdrawRewards(cfg config.Config) error {
 
 	// Step 7: Ask about commission
 	var includeCommission bool
-	if !flagNonInteractive {
-		savedStdin := os.Stdin
-		var tty *os.File
-		if !term.IsTerminal(int(savedStdin.Fd())) {
-			if t, err := os.OpenFile("/dev/tty", os.O_RDONLY, 0); err == nil {
-				tty = t
-				os.Stdin = t
-			}
+	if d.Prompter.IsInteractive() {
+		input, err := d.Prompter.ReadLine("Include commission rewards in withdrawal? (y/n) [n]: ")
+		if err == nil {
+			input = strings.ToLower(input)
+			includeCommission = input == "y" || input == "yes"
 		}
-		if tty != nil {
-			defer func() {
-				os.Stdin = savedStdin
-				tty.Close()
-			}()
-		}
-
-		reader := bufio.NewReader(os.Stdin)
-		fmt.Print("Include commission rewards in withdrawal? (y/n) [n]: ")
-		input, _ := reader.ReadString('\n')
-		input = strings.TrimSpace(strings.ToLower(input))
-		includeCommission = input == "y" || input == "yes"
 		fmt.Println()
 	}
 
@@ -326,19 +266,10 @@ func handleWithdrawRewards(cfg config.Config) error {
 		fmt.Print(p.Colors.Apply(p.Colors.Theme.Prompt, p.Colors.Emoji("📤")+" Submitting withdrawal transaction..."))
 	}
 
-	v := validator.NewWith(validator.Options{
-		BinPath:       findPchaind(),
-		HomeDir:       cfg.HomeDir,
-		ChainID:       cfg.ChainID,
-		Keyring:       cfg.KeyringBackend,
-		GenesisDomain: cfg.GenesisDomain,
-		Denom:         cfg.Denom,
-	})
-
 	ctx5, cancel5 := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel5()
 
-	txHash, err := v.WithdrawRewards(ctx5, myVal.Address, keyName, includeCommission)
+	txHash, err := d.Validator.WithdrawRewards(ctx5, myVal.Address, keyName, includeCommission)
 	if err != nil {
 		if flagOutput == "json" {
 			getPrinter().JSON(map[string]any{"ok": false, "error": err.Error()})

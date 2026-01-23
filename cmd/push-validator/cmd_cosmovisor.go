@@ -67,9 +67,6 @@ Example:
 
 func runCosmovisorStatus(cmd *cobra.Command, args []string) error {
 	cfg := loadCfg()
-	p := getPrinter()
-	c := getPrinter().Colors
-
 	detection := cosmovisor.Detect(cfg.HomeDir)
 	svc := cosmovisor.New(cfg.HomeDir)
 
@@ -77,6 +74,14 @@ func runCosmovisorStatus(cmd *cobra.Command, args []string) error {
 	defer cancel()
 
 	status, _ := svc.Status(ctx)
+
+	return cosmovisorStatusCore(detection, status)
+}
+
+// cosmovisorStatusCore renders the cosmovisor status output (JSON or text).
+func cosmovisorStatusCore(detection cosmovisor.DetectionResult, status *cosmovisor.Status) error {
+	p := getPrinter()
+	c := p.Colors
 
 	if flagOutput == "json" {
 		p.JSON(map[string]any{
@@ -157,19 +162,27 @@ func runCosmovisorStatus(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+// upgradeInfoGeneratorFunc is a function type for generating upgrade info (injectable for testing).
+type upgradeInfoGeneratorFunc func(ctx context.Context, opts cosmovisor.GenerateUpgradeInfoOptions) (*cosmovisor.UpgradeInfo, error)
+
 func runCosmovisorUpgradeInfo(cmd *cobra.Command, args []string) error {
-	if upgradeInfoVersion == "" {
+	ctx, cancel := context.WithTimeout(cmd.Context(), 2*time.Minute)
+	defer cancel()
+
+	return cosmovisorUpgradeInfoCore(ctx, upgradeInfoVersion, upgradeInfoURL, upgradeInfoHeight, cosmovisor.GenerateUpgradeInfo)
+}
+
+// cosmovisorUpgradeInfoCore contains the testable logic for the upgrade-info command.
+func cosmovisorUpgradeInfoCore(ctx context.Context, version, url string, height int64, generator upgradeInfoGeneratorFunc) error {
+	if version == "" {
 		return fmt.Errorf("--version is required")
 	}
-	if upgradeInfoURL == "" {
+	if url == "" {
 		return fmt.Errorf("--url is required")
 	}
 
 	p := getPrinter()
-	c := getPrinter().Colors
-
-	ctx, cancel := context.WithTimeout(cmd.Context(), 2*time.Minute)
-	defer cancel()
+	c := p.Colors
 
 	progress := func(msg string) {
 		if flagOutput != "json" && !flagQuiet {
@@ -180,15 +193,15 @@ func runCosmovisorUpgradeInfo(cmd *cobra.Command, args []string) error {
 	if flagOutput != "json" && !flagQuiet {
 		fmt.Println(c.Header(" UPGRADE INFO GENERATOR "))
 		fmt.Println()
-		fmt.Printf("  Version: %s\n", upgradeInfoVersion)
-		fmt.Printf("  URL:     %s\n", upgradeInfoURL)
+		fmt.Printf("  Version: %s\n", version)
+		fmt.Printf("  URL:     %s\n", url)
 		fmt.Println()
 	}
 
-	info, err := cosmovisor.GenerateUpgradeInfo(ctx, cosmovisor.GenerateUpgradeInfoOptions{
-		Version:  upgradeInfoVersion,
-		BaseURL:  upgradeInfoURL,
-		Height:   upgradeInfoHeight,
+	info, err := generator(ctx, cosmovisor.GenerateUpgradeInfoOptions{
+		Version:  version,
+		BaseURL:  url,
+		Height:   height,
 		Progress: progress,
 	})
 
