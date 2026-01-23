@@ -152,14 +152,14 @@ func handleRestakeRewardsAll(d *Deps) error {
 
 	if totalRewards < rewardThreshold {
 		if flagOutput == "json" {
-			getPrinter().JSON(map[string]any{"ok": false, "error": "no significant rewards available"})
+			getPrinter().JSON(map[string]any{"ok": true, "rewards_available": false, "message": "no significant rewards available"})
 		} else {
 			fmt.Println(p.Colors.Warning(p.Colors.Emoji("⚠️") + " No significant rewards available (less than 0.01 PC)"))
 			fmt.Println()
 			fmt.Println(p.Colors.Info("Nothing to restake. Continue earning rewards and try again later."))
 			fmt.Println()
 		}
-		return fmt.Errorf("no significant rewards available")
+		return nil
 	}
 
 	// Step 4: Auto-detect key name from validator

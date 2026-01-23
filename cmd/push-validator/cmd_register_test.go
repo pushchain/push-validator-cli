@@ -102,11 +102,8 @@ func TestHandleRegisterValidator_AlreadyRegistered_JSON(t *testing.T) {
 	})
 
 	err := handleRegisterValidator(d)
-	if err == nil {
-		t.Fatal("expected error")
-	}
-	if !containsSubstr(err.Error(), "validator already registered") {
-		t.Errorf("unexpected error: %v", err)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
@@ -131,11 +128,8 @@ func TestHandleRegisterValidator_AlreadyRegistered_Text(t *testing.T) {
 	})
 
 	err := handleRegisterValidator(d)
-	if err == nil {
-		t.Fatal("expected error")
-	}
-	if !containsSubstr(err.Error(), "validator already registered") {
-		t.Errorf("unexpected error: %v", err)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

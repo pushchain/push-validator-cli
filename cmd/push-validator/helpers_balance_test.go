@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/pushchain/push-validator-cli/internal/cosmovisor"
 	ui "github.com/pushchain/push-validator-cli/internal/ui"
 	"github.com/pushchain/push-validator-cli/internal/validator"
 )
@@ -217,32 +216,3 @@ func (m *balanceIncrementingValidator) GetEVMAddress(ctx context.Context, addr s
 	return "", nil
 }
 
-func TestNewSupervisorWith_CosmovisorDetected(t *testing.T) {
-	detect := func(homeDir string) cosmovisor.DetectionResult {
-		return cosmovisor.DetectionResult{Available: true, SetupComplete: true}
-	}
-	sup := newSupervisorWith("/tmp/test", detect)
-	if sup == nil {
-		t.Fatal("expected non-nil supervisor")
-	}
-}
-
-func TestNewSupervisorWith_CosmovisorNotDetected(t *testing.T) {
-	detect := func(homeDir string) cosmovisor.DetectionResult {
-		return cosmovisor.DetectionResult{Available: false, SetupComplete: false}
-	}
-	sup := newSupervisorWith("/tmp/test", detect)
-	if sup == nil {
-		t.Fatal("expected non-nil supervisor")
-	}
-}
-
-func TestNewSupervisorWith_AvailableButNotSetup(t *testing.T) {
-	detect := func(homeDir string) cosmovisor.DetectionResult {
-		return cosmovisor.DetectionResult{Available: true, SetupComplete: false}
-	}
-	sup := newSupervisorWith("/tmp/test", detect)
-	if sup == nil {
-		t.Fatal("expected non-nil supervisor")
-	}
-}

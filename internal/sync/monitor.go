@@ -323,9 +323,13 @@ func Run(ctx context.Context, opts Options) error {
 					firstBarTime = time.Now()
 					holdStarted = true
 					barPrinted = true
+					if baseH == 0 && cur > 0 {
+						baseH = cur
+						baseRemote = remoteH
+					}
 				}
 				// Active sync: update progress bar on every tick using current RPC status
-				if st.CatchingUp && barPrinted && baseH > 0 {
+				if st.CatchingUp && barPrinted {
 					cur := st.Height
 					if cur > 0 {
 						// Add current height to buffer for rate calculation

@@ -282,7 +282,7 @@ func handleRegisterValidator(d *Deps) error {
 	}
 	if isValAlready {
 		if flagOutput == "json" {
-			getPrinter().JSON(map[string]any{"ok": false, "error": "validator already registered"})
+			getPrinter().JSON(map[string]any{"ok": true, "registered": true, "message": "validator already registered"})
 		} else {
 			p := getPrinter()
 			fmt.Println()
@@ -299,7 +299,7 @@ func handleRegisterValidator(d *Deps) error {
 			fmt.Println(p.Colors.Apply(p.Colors.Theme.Command, "     push-validator status"))
 			fmt.Println()
 		}
-		return fmt.Errorf("validator already registered")
+		return nil
 	}
 
 	// Check for moniker conflicts before prompting for registration

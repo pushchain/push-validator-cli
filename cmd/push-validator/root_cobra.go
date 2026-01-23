@@ -338,8 +338,5 @@ func loadCfg() config.Config {
 		cfg.GenesisDomain = flagGenesis
 	}
 
-	// Warn if using insecure "test" keyring backend
-	cfg.WarnIfTestKeyring()
-
 	return cfg
 }

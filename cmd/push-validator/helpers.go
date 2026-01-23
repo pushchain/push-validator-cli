@@ -11,23 +11,14 @@ import (
 	"time"
 
 	"github.com/pushchain/push-validator-cli/internal/config"
-	"github.com/pushchain/push-validator-cli/internal/cosmovisor"
 	"github.com/pushchain/push-validator-cli/internal/process"
 	ui "github.com/pushchain/push-validator-cli/internal/ui"
 	"github.com/pushchain/push-validator-cli/internal/validator"
 )
 
-// newSupervisor creates a process supervisor, using cosmovisor if available and configured.
+// newSupervisor creates a Cosmovisor-based process supervisor.
 func newSupervisor(homeDir string) process.Supervisor {
-	return newSupervisorWith(homeDir, cosmovisor.Detect)
-}
-
-// newSupervisorWith is the testable version that accepts a detector function.
-func newSupervisorWith(homeDir string, detect func(string) cosmovisor.DetectionResult) process.Supervisor {
-	if detection := detect(homeDir); detection.Available && detection.SetupComplete {
-		return process.NewCosmovisor(homeDir)
-	}
-	return process.New(homeDir)
+	return process.NewCosmovisor(homeDir)
 }
 
 // findPchaind returns the path to the pchaind binary, resolving

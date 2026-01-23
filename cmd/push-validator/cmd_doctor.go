@@ -48,7 +48,7 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 	c := getPrinter().Colors
 
 	// Create dependencies for checks
-	sup := process.New(cfg.HomeDir)
+	sup := newSupervisor(cfg.HomeDir)
 	rpc := cfg.RPCLocal
 	if rpc == "" {
 		rpc = "http://127.0.0.1:26657"

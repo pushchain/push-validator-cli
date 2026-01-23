@@ -75,6 +75,8 @@ to a static text snapshot.`,
 				NoEmoji:         flagNoEmoji,
 				Debug:           debugMode,
 				CLIVersion:      Version,
+				Supervisor:      newSupervisor(cfg.HomeDir),
+				BinPath:         findPchaind(),
 			}
 			opts = normalizeDashboardOptions(opts)
 

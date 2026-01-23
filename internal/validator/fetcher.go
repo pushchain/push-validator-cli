@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -12,6 +14,24 @@ import (
 
 	"github.com/pushchain/push-validator-cli/internal/config"
 )
+
+// resolvePchaindBin finds pchaind binary in PATH or cosmovisor directory.
+func resolvePchaindBin(homeDir string) (string, error) {
+	if bin, err := exec.LookPath("pchaind"); err == nil {
+		return bin, nil
+	}
+	// Check cosmovisor genesis directory
+	cosmovisorPath := filepath.Join(homeDir, "cosmovisor", "genesis", "bin", "pchaind")
+	if _, err := os.Stat(cosmovisorPath); err == nil {
+		return cosmovisorPath, nil
+	}
+	// Check cosmovisor current directory
+	currentPath := filepath.Join(homeDir, "cosmovisor", "current", "bin", "pchaind")
+	if _, err := os.Stat(currentPath); err == nil {
+		return currentPath, nil
+	}
+	return "", fmt.Errorf("pchaind not found in PATH or %s", filepath.Join(homeDir, "cosmovisor"))
+}
 
 
 
@@ -130,7 +150,7 @@ func (f *Fetcher) GetMyValidator(ctx context.Context, cfg config.Config) (MyVali
 
 // fetchAllValidators queries all validators from the network
 func (f *Fetcher) fetchAllValidators(ctx context.Context, cfg config.Config) (ValidatorList, error) {
-	bin, err := exec.LookPath("pchaind")
+	bin, err := resolvePchaindBin(cfg.HomeDir)
 	if err != nil {
 		return ValidatorList{}, fmt.Errorf("pchaind not found: %w", err)
 	}
@@ -182,6 +202,9 @@ func (f *Fetcher) fetchAllValidators(ctx context.Context, cfg config.Config) (Va
 		commission := "0%"
 		if v.Commission.CommissionRates.Rate != "" {
 			if rate, err := strconv.ParseFloat(v.Commission.CommissionRates.Rate, 64); err == nil {
+				if rate > 1 {
+					rate = rate / 1e18
+				}
 				commission = fmt.Sprintf("%.0f%%", rate*100)
 			}
 		}
@@ -205,7 +228,7 @@ func (f *Fetcher) fetchAllValidators(ctx context.Context, cfg config.Config) (Va
 
 // fetchMyValidator fetches the current node's validator info by comparing consensus pubkeys
 func (f *Fetcher) fetchMyValidator(ctx context.Context, cfg config.Config) (MyValidatorInfo, error) {
-	bin, err := exec.LookPath("pchaind")
+	bin, err := resolvePchaindBin(cfg.HomeDir)
 	if err != nil {
 		return MyValidatorInfo{IsValidator: false}, nil
 	}
@@ -318,6 +341,9 @@ func (f *Fetcher) fetchMyValidator(ctx context.Context, cfg config.Config) (MyVa
 			commission := "0%"
 			if v.Commission.CommissionRates.Rate != "" {
 				if rate, err := strconv.ParseFloat(v.Commission.CommissionRates.Rate, 64); err == nil {
+					if rate > 1 {
+						rate = rate / 1e18
+					}
 					commission = fmt.Sprintf("%.0f%%", rate*100)
 				}
 			}
@@ -386,6 +412,9 @@ func (f *Fetcher) fetchMyValidator(ctx context.Context, cfg config.Config) (MyVa
 				commission := "0%"
 				if v.Commission.CommissionRates.Rate != "" {
 					if rate, err := strconv.ParseFloat(v.Commission.CommissionRates.Rate, 64); err == nil {
+						if rate > 1 {
+							rate = rate / 1e18
+						}
 						commission = fmt.Sprintf("%.0f%%", rate*100)
 					}
 				}
@@ -431,6 +460,9 @@ func (f *Fetcher) fetchMyValidator(ctx context.Context, cfg config.Config) (MyVa
 				commission := "0%"
 				if v.Commission.CommissionRates.Rate != "" {
 					if rate, err := strconv.ParseFloat(v.Commission.CommissionRates.Rate, 64); err == nil {
+						if rate > 1 {
+							rate = rate / 1e18
+						}
 						commission = fmt.Sprintf("%.0f%%", rate*100)
 					}
 				}
@@ -481,7 +513,7 @@ func GetValidatorRewards(ctx context.Context, cfg config.Config, validatorAddr s
 		return "—", "—", fmt.Errorf("validator address required")
 	}
 
-	bin, err := exec.LookPath("pchaind")
+	bin, err := resolvePchaindBin(cfg.HomeDir)
 	if err != nil {
 		return "—", "—", fmt.Errorf("pchaind not found: %w", err)
 	}
@@ -606,7 +638,8 @@ func GetEVMAddress(ctx context.Context, validatorAddr string) string {
 		return "—"
 	}
 
-	bin, err := exec.LookPath("pchaind")
+	homeDir := config.Defaults().HomeDir
+	bin, err := resolvePchaindBin(homeDir)
 	if err != nil {
 		return "—"
 	}
@@ -634,7 +667,7 @@ func GetEVMAddress(ctx context.Context, validatorAddr string) string {
 
 // GetSlashingInfo fetches slashing information for a validator (jail reason, jailed until time, etc)
 func GetSlashingInfo(ctx context.Context, cfg config.Config, consensusPubkey string) (SlashingInfo, error) {
-	bin, err := exec.LookPath("pchaind")
+	bin, err := resolvePchaindBin(cfg.HomeDir)
 	if err != nil {
 		return SlashingInfo{}, fmt.Errorf("pchaind not found: %w", err)
 	}

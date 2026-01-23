@@ -112,11 +112,8 @@ func TestHandleUnjail_NotJailed(t *testing.T) {
 	})
 
 	err := handleUnjail(d)
-	if err == nil {
-		t.Fatal("expected error")
-	}
-	if !containsSubstr(err.Error(), "not jailed") {
-		t.Errorf("unexpected error: %v", err)
+	if err != nil {
+		t.Fatalf("expected nil error, got: %v", err)
 	}
 }
 
@@ -446,8 +443,8 @@ func TestHandleUnjail_TextOutput_NotJailed(t *testing.T) {
 	})
 
 	err := handleUnjail(d)
-	if err == nil {
-		t.Fatal("expected error")
+	if err != nil {
+		t.Fatalf("expected nil error, got: %v", err)
 	}
 }
 

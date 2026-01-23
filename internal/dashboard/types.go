@@ -6,6 +6,7 @@ import (
 
 	"github.com/pushchain/push-validator-cli/internal/config"
 	"github.com/pushchain/push-validator-cli/internal/metrics"
+	"github.com/pushchain/push-validator-cli/internal/process"
 )
 
 // Message types for Bubble Tea event loop - ensures deterministic control flow
@@ -108,9 +109,11 @@ type DashboardData struct {
 type Options struct {
 	Config          config.Config
 	RefreshInterval time.Duration
-	RPCTimeout      time.Duration // Timeout for RPC calls (default: 5s)
+	RPCTimeout      time.Duration  // Timeout for RPC calls (default: 5s)
 	NoColor         bool
 	NoEmoji         bool
-	Debug           bool   // Enable debug output
-	CLIVersion      string // CLI version to display in header
+	Debug           bool               // Enable debug output
+	CLIVersion      string             // CLI version to display in header
+	Supervisor      process.Supervisor // Process supervisor (cosmovisor-aware)
+	BinPath         string             // Path to pchaind binary (resolved via findPchaind)
 }

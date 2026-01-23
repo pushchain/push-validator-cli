@@ -12,8 +12,7 @@ import (
 )
 
 var (
-	restartBin          string
-	restartNoCosmovisor bool
+	restartBin string
 )
 
 var restartCmd = &cobra.Command{
@@ -26,19 +25,12 @@ var restartCmd = &cobra.Command{
 			_ = os.Setenv("PCHAIND", restartBin)
 		}
 
-		// Determine which supervisor to use
-		var sup process.Supervisor
-		useCosmovisor := false
-
-		if !restartNoCosmovisor {
-			detection := cosmovisor.Detect(cfg.HomeDir)
-			if detection.Available {
-				useCosmovisor = true
-			}
-			sup = newSupervisor(cfg.HomeDir)
-		} else {
-			sup = process.New(cfg.HomeDir)
+		// Verify cosmovisor is available
+		detection := cosmovisor.Detect(cfg.HomeDir)
+		if !detection.Available {
+			return fmt.Errorf("cosmovisor binary not found; install it or ensure it's in PATH")
 		}
+		sup := newSupervisor(cfg.HomeDir)
 
 		_, err := sup.Restart(process.StartOpts{HomeDir: cfg.HomeDir, Moniker: os.Getenv("MONIKER"), BinPath: findPchaind()})
 		if err != nil {
@@ -56,13 +48,9 @@ var restartCmd = &cobra.Command{
 			return err
 		}
 		if flagOutput == "json" {
-			p.JSON(map[string]any{"ok": true, "action": "restart", "cosmovisor": useCosmovisor})
+			p.JSON(map[string]any{"ok": true, "action": "restart", "cosmovisor": true})
 		} else {
-			if useCosmovisor {
-				p.Success("✓ Node restarted with Cosmovisor")
-			} else {
-				p.Success("✓ Node restarted")
-			}
+			p.Success("✓ Node restarted with Cosmovisor")
 			fmt.Println()
 			fmt.Println(p.Colors.Info("Useful commands:"))
 			fmt.Println(p.Colors.Apply(p.Colors.Theme.Command, "  push-validator status"))
@@ -78,6 +66,5 @@ var restartCmd = &cobra.Command{
 
 func init() {
 	restartCmd.Flags().StringVar(&restartBin, "bin", "", "Path to pchaind binary")
-	restartCmd.Flags().BoolVar(&restartNoCosmovisor, "no-cosmovisor", false, "Use direct pchaind instead of Cosmovisor")
 	rootCmd.AddCommand(restartCmd)
 }

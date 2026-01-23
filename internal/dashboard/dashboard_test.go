@@ -724,7 +724,7 @@ func TestValidatorsListHandleKeyPagination(t *testing.T) {
 
 // Test log_viewer styleLogLine
 func TestStyleLogLine(t *testing.T) {
-	lv := NewLogViewer(true, "/tmp/test")
+	lv := NewLogViewer(true, "/tmp/test/logs/pchaind.log")
 	defer lv.Close()
 
 	tests := []struct {
@@ -796,7 +796,7 @@ func TestStyleLogLine(t *testing.T) {
 
 // Test log_viewer renderFooter
 func TestRenderFooter(t *testing.T) {
-	lv := NewLogViewer(true, "/tmp/test")
+	lv := NewLogViewer(true, "/tmp/test/logs/pchaind.log")
 	defer lv.Close()
 
 	// Test follow mode footer
@@ -832,7 +832,7 @@ func TestRenderFooter(t *testing.T) {
 
 // Test log_viewer Title
 func TestLogViewerTitle(t *testing.T) {
-	lv := NewLogViewer(true, "/tmp/test")
+	lv := NewLogViewer(true, "/tmp/test/logs/pchaind.log")
 	defer lv.Close()
 
 	// Test normal mode
@@ -865,7 +865,7 @@ func TestLogViewerTitle(t *testing.T) {
 
 // Test log_viewer handleKey
 func TestLogViewerHandleKey(t *testing.T) {
-	lv := NewLogViewer(true, "/tmp/test")
+	lv := NewLogViewer(true, "/tmp/test/logs/pchaind.log")
 	defer lv.Close()
 
 	// Add some test data to buffer
@@ -1012,7 +1012,7 @@ func TestLogViewerHandleKey(t *testing.T) {
 
 // Test log_viewer View and renderContent
 func TestLogViewerView(t *testing.T) {
-	lv := NewLogViewer(true, "/tmp/test")
+	lv := NewLogViewer(true, "/tmp/test/logs/pchaind.log")
 	defer lv.Close()
 
 	// Add test lines
@@ -1035,7 +1035,7 @@ func TestLogViewerView(t *testing.T) {
 
 // Test log_viewer MinWidth and MinHeight
 func TestLogViewerMinDimensions(t *testing.T) {
-	lv := NewLogViewer(true, "/tmp/test")
+	lv := NewLogViewer(true, "/tmp/test/logs/pchaind.log")
 	defer lv.Close()
 
 	if lv.MinWidth() != 40 {
@@ -1049,7 +1049,7 @@ func TestLogViewerMinDimensions(t *testing.T) {
 
 // Test log_viewer Update method
 func TestLogViewerUpdate(t *testing.T) {
-	lv := NewLogViewer(true, "/tmp/test")
+	lv := NewLogViewer(true, "/tmp/test/logs/pchaind.log")
 	defer lv.Close()
 
 	data := createTestData()

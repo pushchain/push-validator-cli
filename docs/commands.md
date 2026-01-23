@@ -35,7 +35,6 @@ push-validator start [flags]
 |------|------|---------|-------------|
 | `--bin` | string | | Path to pchaind binary |
 | `--no-prompt` | bool | `false` | Skip post-start prompts (for scripts) |
-| `--no-cosmovisor` | bool | `false` | Use direct pchaind instead of Cosmovisor |
 
 ---
 
@@ -94,7 +93,6 @@ push-validator restart [flags]
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
 | `--bin` | string | | Path to pchaind binary |
-| `--no-cosmovisor` | bool | `false` | Use direct pchaind instead of Cosmovisor |
 
 ---
 

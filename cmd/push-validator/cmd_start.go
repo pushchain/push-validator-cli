@@ -25,9 +25,8 @@ import (
 )
 
 var (
-	startBin          string
-	startNoPrompt     bool
-	startNoCosmovisor bool
+	startBin      string
+	startNoPrompt bool
 )
 
 var startCmd = &cobra.Command{
@@ -102,22 +101,15 @@ var startCmd = &cobra.Command{
 			}
 		}
 
-		// Determine which supervisor to use (Cosmovisor or direct pchaind)
-		var sup process.Supervisor
-		useCosmovisor := false
-
-		if !startNoCosmovisor {
-			detection := cosmovisor.Detect(cfg.HomeDir)
-			if detection.Available {
-				useCosmovisor = true
-				if flagOutput != "json" && !detection.SetupComplete {
-					p.Info("Initializing Cosmovisor...")
-				}
-			}
-			sup = newSupervisor(cfg.HomeDir)
-		} else {
-			sup = process.New(cfg.HomeDir)
+		// Verify cosmovisor is available
+		detection := cosmovisor.Detect(cfg.HomeDir)
+		if !detection.Available {
+			return fmt.Errorf("cosmovisor binary not found; install it or ensure it's in PATH")
 		}
+		if flagOutput != "json" && !detection.SetupComplete {
+			p.Info("Initializing Cosmovisor...")
+		}
+		sup := newSupervisor(cfg.HomeDir)
 
 		// Check if node is already running
 		isAlreadyRunning := sup.IsRunning()
@@ -130,11 +122,7 @@ var startCmd = &cobra.Command{
 					p.Success("Node is running")
 				}
 			} else {
-				if useCosmovisor {
-					fmt.Println("→ Starting node with Cosmovisor...")
-				} else {
-					fmt.Println("→ Starting node...")
-				}
+				fmt.Println("→ Starting node with Cosmovisor...")
 			}
 		}
 
@@ -160,14 +148,10 @@ var startCmd = &cobra.Command{
 			return err
 		}
 		if flagOutput == "json" {
-			p.JSON(map[string]any{"ok": true, "action": "start", "already_running": isAlreadyRunning, "cosmovisor": useCosmovisor})
+			p.JSON(map[string]any{"ok": true, "action": "start", "already_running": isAlreadyRunning, "cosmovisor": true})
 		} else {
 			if !isAlreadyRunning {
-				if useCosmovisor {
-					p.Success("Node started with Cosmovisor")
-				} else {
-					p.Success("Node started successfully")
-				}
+				p.Success("Node started with Cosmovisor")
 			}
 
 			// Check validator status and show appropriate next steps (skip if --no-prompt)
@@ -186,7 +170,6 @@ var startCmd = &cobra.Command{
 func init() {
 	startCmd.Flags().StringVar(&startBin, "bin", "", "Path to pchaind binary")
 	startCmd.Flags().BoolVar(&startNoPrompt, "no-prompt", false, "Skip post-start prompts (for use in scripts)")
-	startCmd.Flags().BoolVar(&startNoCosmovisor, "no-cosmovisor", false, "Use direct pchaind instead of Cosmovisor")
 	rootCmd.AddCommand(startCmd)
 }
 

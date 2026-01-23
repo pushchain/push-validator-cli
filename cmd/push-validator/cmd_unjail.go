@@ -99,7 +99,7 @@ func handleUnjail(d *Deps) error {
 
 	if !myVal.Jailed {
 		if flagOutput == "json" {
-			getPrinter().JSON(map[string]any{"ok": false, "error": "validator is not jailed"})
+			getPrinter().JSON(map[string]any{"ok": true, "status": myVal.Status, "message": "validator is not jailed"})
 		} else {
 			fmt.Println()
 			fmt.Println(p.Colors.Success(p.Colors.Emoji("✓") + " Validator is active (not jailed)"))
@@ -107,7 +107,7 @@ func handleUnjail(d *Deps) error {
 			fmt.Println(p.Colors.Info("Status: " + myVal.Status))
 			fmt.Println()
 		}
-		return fmt.Errorf("validator is not jailed")
+		return nil
 	}
 
 	if flagOutput != "json" {

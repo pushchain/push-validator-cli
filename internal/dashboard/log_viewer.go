@@ -87,8 +87,7 @@ func (rb *ringBuffer) Count() int {
 }
 
 // NewLogViewer creates a new log viewer component
-func NewLogViewer(noEmoji bool, homeDir string) *LogViewer {
-	logPath := homeDir + "/logs/pchaind.log"
+func NewLogViewer(noEmoji bool, logPath string) *LogViewer {
 
 	lv := &LogViewer{
 		BaseComponent: BaseComponent{},

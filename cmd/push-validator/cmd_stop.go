@@ -15,28 +15,14 @@ var stopCmd = &cobra.Command{
 		cfg := loadCfg()
 		p := getPrinter()
 
-		// Try to stop Cosmovisor first (it will also handle direct pchaind if running)
-		cosmoSup := process.NewCosmovisor(cfg.HomeDir)
-		if cosmoSup.IsRunning() {
-			if err := cosmoSup.Stop(); err != nil {
-				if flagOutput == "json" {
-					p.JSON(map[string]any{"ok": false, "error": err.Error()})
-				} else {
-					p.Error(fmt.Sprintf("stop error: %v", err))
-				}
-				return err
+		sup := process.NewCosmovisor(cfg.HomeDir)
+		if err := sup.Stop(); err != nil {
+			if flagOutput == "json" {
+				p.JSON(map[string]any{"ok": false, "error": err.Error()})
+			} else {
+				p.Error(fmt.Sprintf("stop error: %v", err))
 			}
-		} else {
-			// Fall back to direct pchaind supervisor
-			sup := process.New(cfg.HomeDir)
-			if err := sup.Stop(); err != nil {
-				if flagOutput == "json" {
-					p.JSON(map[string]any{"ok": false, "error": err.Error()})
-				} else {
-					p.Error(fmt.Sprintf("stop error: %v", err))
-				}
-				return err
-			}
+			return err
 		}
 
 		if flagOutput == "json" {

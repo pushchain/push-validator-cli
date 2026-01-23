@@ -1,11 +1,9 @@
 package config
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 )
 
 // Config holds user/system configuration for the manager.
@@ -57,15 +55,3 @@ func (c Config) RemoteRPCURL() string {
 	return "https://" + strings.TrimSuffix(c.GenesisDomain, "/") + ":443"
 }
 
-// warnedOnce tracks whether we've already warned about test keyring backend
-var warnedOnce sync.Once
-
-// WarnIfTestKeyring prints a warning to stderr if the keyring backend is "test".
-// This warning is only shown once per process invocation.
-func (c Config) WarnIfTestKeyring() {
-	if c.KeyringBackend == "test" {
-		warnedOnce.Do(func() {
-			fmt.Fprintf(os.Stderr, "Warning: Using \"test\" keyring backend. Keys are stored unencrypted. Set PUSH_KEYRING_BACKEND for production use.\n")
-		})
-	}
-}

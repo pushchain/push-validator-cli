@@ -158,7 +158,11 @@ func New(opts Options) *Dashboard {
 	registry.Register(NewNetworkStatus(opts.NoEmoji))
 	registry.Register(NewValidatorsList(opts.NoEmoji, opts.Config))
 	registry.Register(NewValidatorInfo(opts.NoEmoji))
-	registry.Register(NewLogViewer(opts.NoEmoji, opts.Config.HomeDir))
+	logPath := opts.Config.HomeDir + "/logs/pchaind.log"
+	if opts.Supervisor != nil {
+		logPath = opts.Supervisor.LogPath()
+	}
+	registry.Register(NewLogViewer(opts.NoEmoji, logPath))
 
 	// Configure layout
 	layoutConfig := LayoutConfig{
@@ -589,8 +593,11 @@ func (m *Dashboard) fetchData(ctx context.Context) (DashboardData, error) {
 		}
 	}
 
-	// Fetch node info
-	sup := process.New(m.opts.Config.HomeDir)
+	// Fetch node info (use injected supervisor for cosmovisor awareness)
+	sup := m.opts.Supervisor
+	if sup == nil {
+		sup = process.NewCosmovisor(m.opts.Config.HomeDir)
+	}
 	data.NodeInfo.Running = sup.IsRunning()
 	if pid, ok := sup.PID(); ok {
 		data.NodeInfo.PID = pid
@@ -696,11 +703,14 @@ func (m *Dashboard) getCachedVersion(ctx context.Context, running bool, currentP
 		return m.cachedVersion
 	}
 
-	// First check if pchaind exists in PATH
-	pchainPath, err := exec.LookPath("pchaind")
-	if err != nil {
+	// Resolve pchaind binary path (from --bin flag, env, cosmovisor, or PATH)
+	pchainPath := m.opts.BinPath
+	if pchainPath == "" {
+		pchainPath = "pchaind"
+	}
+	if _, err := exec.LookPath(pchainPath); err != nil {
 		if m.opts.Debug {
-			fmt.Fprintf(os.Stderr, "Debug: pchaind not found in PATH: %v\n", err)
+			fmt.Fprintf(os.Stderr, "Debug: pchaind not found at %q: %v\n", pchainPath, err)
 		}
 		m.cachedVersion = "pchaind not found"
 		return m.cachedVersion
