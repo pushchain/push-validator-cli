@@ -14,6 +14,35 @@ import (
 	"github.com/pushchain/push-validator-cli/internal/dashboard"
 )
 
+// dashboardFlags holds the parsed flag values for the dashboard command.
+type dashboardFlags struct {
+	refreshInterval time.Duration
+	rpcTimeout      time.Duration
+	debugMode       bool
+}
+
+// dashboardCoreDeps holds injectable dependencies for runDashboardCmdCore.
+type dashboardCoreDeps struct {
+	isTTY          func() bool
+	runStatic      func(ctx context.Context, opts dashboard.Options) error
+	runInteractive func(opts dashboard.Options) error
+}
+
+// runDashboardCmdCore contains the testable logic for the dashboard RunE handler.
+func runDashboardCmdCore(ctx context.Context, opts dashboard.Options, deps dashboardCoreDeps) error {
+	if !deps.isTTY() {
+		if opts.Debug {
+			fmt.Fprintln(os.Stderr, "Debug: Non-TTY detected, using static mode")
+		}
+		return deps.runStatic(ctx, opts)
+	}
+
+	if opts.Debug {
+		fmt.Fprintln(os.Stderr, "Debug: TTY detected, using interactive mode")
+	}
+	return deps.runInteractive(opts)
+}
+
 // dashboardCmd provides an interactive TUI dashboard for monitoring validator status
 func createDashboardCmd() *cobra.Command {
 	var (
@@ -37,10 +66,7 @@ The dashboard auto-refreshes every 2 seconds by default. Press '?' for help.
 For non-interactive environments (CI/pipes), dashboard automatically falls back
 to a static text snapshot.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// Load configuration
 			cfg := loadCfg()
-
-			// Build dashboard options
 			opts := dashboard.Options{
 				Config:          cfg,
 				RefreshInterval: refreshInterval,
@@ -52,26 +78,14 @@ to a static text snapshot.`,
 			}
 			opts = normalizeDashboardOptions(opts)
 
-			// Check if we're in a TTY environment
-			isTTY := term.IsTerminal(int(os.Stdout.Fd()))
-
-			if !isTTY {
-				// Non-TTY environment (CI/pipes): use static mode
-				if debugMode {
-					fmt.Fprintln(os.Stderr, "Debug: Non-TTY detected, using static mode")
-				}
-				return runDashboardStatic(cmd.Context(), opts)
-			}
-
-			// TTY environment: use interactive Bubble Tea dashboard
-			if debugMode {
-				fmt.Fprintln(os.Stderr, "Debug: TTY detected, using interactive mode")
-			}
-			return runDashboardInteractive(opts)
+			return runDashboardCmdCore(cmd.Context(), opts, dashboardCoreDeps{
+				isTTY:          func() bool { return term.IsTerminal(int(os.Stdout.Fd())) },
+				runStatic:      runDashboardStatic,
+				runInteractive: runDashboardInteractive,
+			})
 		},
 	}
 
-	// Flags
 	cmd.Flags().DurationVar(&refreshInterval, "refresh-interval", 2*time.Second, "Dashboard refresh interval")
 	cmd.Flags().DurationVar(&rpcTimeout, "rpc-timeout", 15*time.Second, "RPC request timeout")
 	cmd.Flags().BoolVar(&debugMode, "debug", false, "Enable debug mode for troubleshooting")

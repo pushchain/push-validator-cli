@@ -377,8 +377,16 @@ func handlePostStartFlow(cfg config.Config, p *ui.Printer) bool {
 	return true
 }
 
-// handleDashboard launches the interactive dashboard
-func handleDashboard(cfg config.Config) error {
+// DashboardRunner abstracts launching the interactive dashboard, allowing tests
+// to substitute a no-op implementation.
+type DashboardRunner interface {
+	Run(cfg config.Config) error
+}
+
+// prodDashboardRunner is the production implementation that launches the TUI.
+type prodDashboardRunner struct{}
+
+func (prodDashboardRunner) Run(cfg config.Config) error {
 	opts := dashboard.Options{
 		Config:          cfg,
 		RefreshInterval: 3 * time.Second,
@@ -393,7 +401,7 @@ func handleDashboard(cfg config.Config) error {
 
 // showDashboardPrompt displays a prompt asking user to press ENTER to launch dashboard.
 func showDashboardPrompt(cfg config.Config, p *ui.Printer) {
-	showDashboardPromptWith(cfg, p, &ttyPrompter{})
+	showDashboardPromptWith(cfg, p, &ttyPrompter{}, prodDashboardRunner{})
 }
 
 // isTerminalInteractive checks if we're running in an interactive terminal
@@ -461,8 +469,8 @@ func computePostStartDecision(valResult valCheckResult, isInteractive bool) post
 	return actionPromptRegister
 }
 
-// showDashboardPromptWith is a testable version that uses a Prompter.
-func showDashboardPromptWith(cfg config.Config, p *ui.Printer, prompter Prompter) {
+// showDashboardPromptWith is a testable version that uses a Prompter and DashboardRunner.
+func showDashboardPromptWith(cfg config.Config, p *ui.Printer, prompter Prompter, runner DashboardRunner) {
 	fmt.Println()
 	fmt.Println("╔═══════════════════════════════════════════════════════════════╗")
 	fmt.Println("║                      DASHBOARD AVAILABLE                      ║")
@@ -489,7 +497,7 @@ func showDashboardPromptWith(cfg config.Config, p *ui.Printer, prompter Prompter
 	}
 
 	fmt.Println()
-	_ = handleDashboard(cfg)
+	_ = runner.Run(cfg)
 
 	fmt.Println()
 	fmt.Println("═══════════════════════════════════════════════════════════════")

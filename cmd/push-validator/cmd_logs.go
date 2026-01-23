@@ -13,9 +13,27 @@ import (
 	ui "github.com/pushchain/push-validator-cli/internal/ui"
 )
 
+// logDeps holds injectable dependencies for handleLogsCore.
+type logDeps struct {
+	isTerminal func(fd int) bool
+	openTTY    func() (*os.File, error)
+	runLogUI   func(ctx context.Context, opts ui.LogUIOptions) error
+	stat       func(name string) (os.FileInfo, error)
+}
+
 // handleLogs tails the node log file until interrupted. It validates
 // the log path and prints structured JSON errors when --output=json.
 func handleLogs(sup process.Supervisor) error {
+	return handleLogsCore(sup, logDeps{
+		isTerminal: func(fd int) bool { return term.IsTerminal(fd) },
+		openTTY:    func() (*os.File, error) { return os.OpenFile("/dev/tty", os.O_RDWR, 0) },
+		runLogUI:   ui.RunLogUIV2,
+		stat:       os.Stat,
+	})
+}
+
+// handleLogsCore contains the testable core logic for handleLogs.
+func handleLogsCore(sup process.Supervisor, deps logDeps) error {
 	lp := sup.LogPath()
 	if lp == "" {
 		if flagOutput == "json" {
@@ -25,7 +43,7 @@ func handleLogs(sup process.Supervisor) error {
 		}
 		return fmt.Errorf("no log path configured")
 	}
-	if _, err := os.Stat(lp); err != nil {
+	if _, err := deps.stat(lp); err != nil {
 		if flagOutput == "json" {
 			getPrinter().JSON(map[string]any{"ok": false, "error": "log file not found", "path": lp})
 		} else {
@@ -33,11 +51,11 @@ func handleLogs(sup process.Supervisor) error {
 		}
 		return fmt.Errorf("log file not found: %s", lp)
 	}
-	interactive := term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd())) && !flagNonInteractive
+	interactive := deps.isTerminal(int(os.Stdin.Fd())) && deps.isTerminal(int(os.Stdout.Fd())) && !flagNonInteractive
 	var tty *os.File
 	if !interactive && !flagNonInteractive {
-		if t, err := os.OpenFile("/dev/tty", os.O_RDWR, 0); err == nil {
-			if term.IsTerminal(int(t.Fd())) {
+		if t, err := deps.openTTY(); err == nil {
+			if deps.isTerminal(int(t.Fd())) {
 				interactive = true
 				tty = t
 			} else {
@@ -71,9 +89,7 @@ func handleLogs(sup process.Supervisor) error {
 		}()
 	}
 
-	// RunLogUIV2 handles both interactive (with TUI) and non-interactive (tail -F) modes
-	// It automatically detects TTY and falls back to simple tail when needed
-	return ui.RunLogUIV2(ctx, ui.LogUIOptions{
+	return deps.runLogUI(ctx, ui.LogUIOptions{
 		LogPath:    lp,
 		BgKey:      'b',
 		ShowFooter: interactive,

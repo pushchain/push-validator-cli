@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -76,5 +78,129 @@ func TestNormalizeDashboardOptions_SmallRefresh(t *testing.T) {
 	// With 1s refresh, timeout should be min(15s, 2*1s=2s) = 2s
 	if opts.RPCTimeout != 2*time.Second {
 		t.Errorf("RPCTimeout = %v, want 2s", opts.RPCTimeout)
+	}
+}
+
+// --- Tests for runDashboardCmdCore ---
+
+func TestRunDashboardCmdCore_NonTTY_CallsStatic(t *testing.T) {
+	staticCalled := false
+	interactiveCalled := false
+
+	deps := dashboardCoreDeps{
+		isTTY: func() bool { return false },
+		runStatic: func(ctx context.Context, opts dashboard.Options) error {
+			staticCalled = true
+			return nil
+		},
+		runInteractive: func(opts dashboard.Options) error {
+			interactiveCalled = true
+			return nil
+		},
+	}
+
+	opts := dashboard.Options{RefreshInterval: 2 * time.Second}
+	err := runDashboardCmdCore(context.Background(), opts, deps)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !staticCalled {
+		t.Error("expected runStatic to be called")
+	}
+	if interactiveCalled {
+		t.Error("expected runInteractive NOT to be called")
+	}
+}
+
+func TestRunDashboardCmdCore_TTY_CallsInteractive(t *testing.T) {
+	staticCalled := false
+	interactiveCalled := false
+
+	deps := dashboardCoreDeps{
+		isTTY: func() bool { return true },
+		runStatic: func(ctx context.Context, opts dashboard.Options) error {
+			staticCalled = true
+			return nil
+		},
+		runInteractive: func(opts dashboard.Options) error {
+			interactiveCalled = true
+			return nil
+		},
+	}
+
+	opts := dashboard.Options{RefreshInterval: 2 * time.Second}
+	err := runDashboardCmdCore(context.Background(), opts, deps)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if staticCalled {
+		t.Error("expected runStatic NOT to be called")
+	}
+	if !interactiveCalled {
+		t.Error("expected runInteractive to be called")
+	}
+}
+
+func TestRunDashboardCmdCore_Static_Error(t *testing.T) {
+	deps := dashboardCoreDeps{
+		isTTY: func() bool { return false },
+		runStatic: func(ctx context.Context, opts dashboard.Options) error {
+			return fmt.Errorf("fetch failed")
+		},
+		runInteractive: func(opts dashboard.Options) error { return nil },
+	}
+
+	opts := dashboard.Options{}
+	err := runDashboardCmdCore(context.Background(), opts, deps)
+	if err == nil || err.Error() != "fetch failed" {
+		t.Errorf("expected 'fetch failed', got: %v", err)
+	}
+}
+
+func TestRunDashboardCmdCore_Interactive_Error(t *testing.T) {
+	deps := dashboardCoreDeps{
+		isTTY:     func() bool { return true },
+		runStatic: func(ctx context.Context, opts dashboard.Options) error { return nil },
+		runInteractive: func(opts dashboard.Options) error {
+			return fmt.Errorf("TUI error")
+		},
+	}
+
+	opts := dashboard.Options{}
+	err := runDashboardCmdCore(context.Background(), opts, deps)
+	if err == nil || err.Error() != "TUI error" {
+		t.Errorf("expected 'TUI error', got: %v", err)
+	}
+}
+
+func TestRunDashboardCmdCore_Debug_NonTTY(t *testing.T) {
+	deps := dashboardCoreDeps{
+		isTTY: func() bool { return false },
+		runStatic: func(ctx context.Context, opts dashboard.Options) error {
+			return nil
+		},
+		runInteractive: func(opts dashboard.Options) error { return nil },
+	}
+
+	opts := dashboard.Options{Debug: true}
+	err := runDashboardCmdCore(context.Background(), opts, deps)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunDashboardCmdCore_Debug_TTY(t *testing.T) {
+	deps := dashboardCoreDeps{
+		isTTY:     func() bool { return true },
+		runStatic: func(ctx context.Context, opts dashboard.Options) error { return nil },
+		runInteractive: func(opts dashboard.Options) error {
+			return nil
+		},
+	}
+
+	opts := dashboard.Options{Debug: true}
+	err := runDashboardCmdCore(context.Background(), opts, deps)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }

@@ -1,8 +1,10 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"time"
 
@@ -11,6 +13,69 @@ import (
 	"github.com/pushchain/push-validator-cli/internal/exitcodes"
 	syncmon "github.com/pushchain/push-validator-cli/internal/sync"
 )
+
+// SyncRunner abstracts the sync monitor for testability.
+type SyncRunner interface {
+	Run(ctx context.Context, opts syncmon.Options) error
+}
+
+// prodSyncRunner is the production implementation.
+type prodSyncRunner struct{}
+
+func (prodSyncRunner) Run(ctx context.Context, opts syncmon.Options) error {
+	return syncmon.Run(ctx, opts)
+}
+
+// syncCoreOpts holds options for the sync core logic.
+type syncCoreOpts struct {
+	rpc          string
+	remote       string
+	logPath      string
+	window       int
+	compact      bool
+	interval     time.Duration
+	stuckTimeout time.Duration
+	skipFinal    bool
+	quiet        bool
+	debug        bool
+}
+
+// runSyncCore contains the testable sync logic.
+func runSyncCore(ctx context.Context, runner SyncRunner, opts syncCoreOpts, output io.Writer) error {
+	stuckTimeout := opts.stuckTimeout
+	if stuckTimeout <= 0 {
+		if envTimeout := os.Getenv("PNM_SYNC_STUCK_TIMEOUT"); envTimeout != "" {
+			if parsed, err := time.ParseDuration(envTimeout); err == nil {
+				stuckTimeout = parsed
+			}
+		}
+	}
+	if err := runner.Run(ctx, syncmon.Options{
+		LocalRPC:     opts.rpc,
+		RemoteRPC:    opts.remote,
+		LogPath:      opts.logPath,
+		Window:       opts.window,
+		Compact:      opts.compact,
+		Out:          output,
+		Interval:     opts.interval,
+		Quiet:        opts.quiet,
+		Debug:        opts.debug,
+		StuckTimeout: stuckTimeout,
+	}); err != nil {
+		if errors.Is(err, syncmon.ErrSyncStuck) {
+			return exitcodes.NewError(exitcodes.SyncStuck, err.Error())
+		}
+		return err
+	}
+	if !opts.skipFinal {
+		if opts.quiet {
+			fmt.Fprintln(output, "  Sync complete.")
+		} else {
+			fmt.Fprintln(output, "  \u2713 Sync complete! Node is fully synced.")
+		}
+	}
+	return nil
+}
 
 func init() {
 	var syncCompact bool
@@ -33,39 +98,18 @@ func init() {
 				syncRemote = cfg.RemoteRPCURL()
 			}
 			sup := newSupervisor(cfg.HomeDir)
-			if syncStuckTimeout <= 0 {
-				if envTimeout := os.Getenv("PNM_SYNC_STUCK_TIMEOUT"); envTimeout != "" {
-					if parsed, err := time.ParseDuration(envTimeout); err == nil {
-						syncStuckTimeout = parsed
-					}
-				}
-			}
-			if err := syncmon.Run(cmd.Context(), syncmon.Options{
-				LocalRPC:     syncRPC,
-				RemoteRPC:    syncRemote,
-				LogPath:      sup.LogPath(),
-				Window:       syncWindow,
-				Compact:      syncCompact,
-				Out:          os.Stdout,
-				Interval:     syncInterval,
-				Quiet:        flagQuiet,
-				Debug:        flagDebug,
-				StuckTimeout: syncStuckTimeout,
-			}); err != nil {
-				if errors.Is(err, syncmon.ErrSyncStuck) {
-					return exitcodes.NewError(exitcodes.SyncStuck, err.Error())
-				}
-				return err
-			}
-			if !syncSkipFinal {
-				out := cmd.OutOrStdout()
-				if flagQuiet {
-					fmt.Fprintln(out, "  Sync complete.")
-				} else {
-					fmt.Fprintln(out, "  ✓ Sync complete! Node is fully synced.")
-				}
-			}
-			return nil
+			return runSyncCore(cmd.Context(), prodSyncRunner{}, syncCoreOpts{
+				rpc:          syncRPC,
+				remote:       syncRemote,
+				logPath:      sup.LogPath(),
+				window:       syncWindow,
+				compact:      syncCompact,
+				interval:     syncInterval,
+				stuckTimeout: syncStuckTimeout,
+				skipFinal:    syncSkipFinal,
+				quiet:        flagQuiet,
+				debug:        flagDebug,
+			}, cmd.OutOrStdout())
 		},
 	}
 	syncCmd.Flags().BoolVar(&syncCompact, "compact", false, "Compact output")

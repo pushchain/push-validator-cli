@@ -243,3 +243,14 @@ func (p *mockPrompter) ReadLine(prompt string) (string, error) {
 func (p *mockPrompter) IsInteractive() bool {
 	return p.interactive
 }
+
+// mockDashboardRunner implements DashboardRunner for tests.
+type mockDashboardRunner struct {
+	runErr error
+	called bool
+}
+
+func (m *mockDashboardRunner) Run(cfg config.Config) error {
+	m.called = true
+	return m.runErr
+}

@@ -255,8 +255,3 @@ func checkNodeRunningInDir(homeDir string) bool {
 	return false
 }
 
-// isNodeRunning checks if the validator node is currently running
-func isNodeRunning() bool {
-	cfg := loadCfg()
-	return checkNodeRunningInDir(cfg.HomeDir)
-}

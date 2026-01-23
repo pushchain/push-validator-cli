@@ -1,6 +1,8 @@
 package main
 
 import (
+	"fmt"
+	"os"
 	"testing"
 
 	"github.com/pushchain/push-validator-cli/internal/snapshot"
@@ -105,6 +107,42 @@ func TestIsTerminalInteractiveWith_InvalidFd(t *testing.T) {
 	}
 }
 
+func TestIsTerminalInteractiveWith_PipeFds(t *testing.T) {
+	// Pipes are valid FDs but are NOT terminals
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	defer w.Close()
+
+	result := isTerminalInteractiveWith(r.Fd(), w.Fd())
+	if result {
+		t.Error("expected false for pipe fds (not terminals)")
+	}
+}
+
+func TestIsTerminalInteractiveWith_MixedFds(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	defer w.Close()
+
+	// Valid stdin (pipe), invalid stdout
+	result := isTerminalInteractiveWith(r.Fd(), 99999)
+	if result {
+		t.Error("expected false when stdout is invalid")
+	}
+
+	// Invalid stdin, valid stdout (pipe)
+	result = isTerminalInteractiveWith(99999, w.Fd())
+	if result {
+		t.Error("expected false when stdin is invalid")
+	}
+}
+
 func TestCheckValidatorRegistration_Immediate(t *testing.T) {
 	v := &mockValidator{isValidatorRes: true}
 	result := checkValidatorRegistration(v, 0)
@@ -167,25 +205,43 @@ func TestShowDashboardPromptWith_NonInteractive(t *testing.T) {
 	p := testPrinter()
 	prompter := &mockPrompter{interactive: false}
 	cfg := testCfg()
-	// Should not panic and should print non-interactive message
-	showDashboardPromptWith(cfg, &p, prompter)
+	runner := &mockDashboardRunner{}
+	showDashboardPromptWith(cfg, &p, prompter, runner)
+	if runner.called {
+		t.Error("dashboard runner should not be called in non-interactive mode")
+	}
 }
 
 func TestShowDashboardPromptWith_Interactive_Error(t *testing.T) {
 	p := testPrinter()
-	// Prompter with no responses configured will return error
 	prompter := &mockPrompter{interactive: true, responses: []string{}}
 	cfg := testCfg()
-	// Should handle ReadLine error gracefully
-	showDashboardPromptWith(cfg, &p, prompter)
+	runner := &mockDashboardRunner{}
+	showDashboardPromptWith(cfg, &p, prompter, runner)
+	if runner.called {
+		t.Error("dashboard runner should not be called when prompter errors")
+	}
 }
 
 func TestShowDashboardPromptWith_Interactive_Success(t *testing.T) {
 	p := testPrinter()
-	// Prompter responds with Enter (empty string)
 	prompter := &mockPrompter{interactive: true, responses: []string{""}}
 	cfg := testCfg()
-	// This will call handleDashboard which will fail gracefully (no node running)
-	// but the point is testing the prompt success path
-	showDashboardPromptWith(cfg, &p, prompter)
+	runner := &mockDashboardRunner{}
+	showDashboardPromptWith(cfg, &p, prompter, runner)
+	if !runner.called {
+		t.Error("dashboard runner should be called on successful prompt")
+	}
+}
+
+func TestShowDashboardPromptWith_Interactive_DashboardError(t *testing.T) {
+	p := testPrinter()
+	prompter := &mockPrompter{interactive: true, responses: []string{""}}
+	cfg := testCfg()
+	runner := &mockDashboardRunner{runErr: fmt.Errorf("dashboard failed")}
+	// Should not panic even if dashboard returns error
+	showDashboardPromptWith(cfg, &p, prompter, runner)
+	if !runner.called {
+		t.Error("dashboard runner should be called")
+	}
 }

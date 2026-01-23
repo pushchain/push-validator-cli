@@ -581,3 +581,92 @@ func TestTypesStructs(t *testing.T) {
 		t.Error("UpdateOptions.Force = false, want true")
 	}
 }
+
+// --- Additional coverage tests ---
+
+func TestFetchLatestRelease_InvalidJSON(t *testing.T) {
+	mock := &mockHTTPDoer{
+		doFunc: func(req *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: 200,
+				Body:       io.NopCloser(bytes.NewBufferString("not valid json {")),
+			}, nil
+		},
+	}
+	u := &Updater{http: mock}
+	_, err := u.FetchLatestRelease()
+	if err == nil {
+		t.Fatal("expected error for invalid JSON")
+	}
+}
+
+func TestFetchLatestRelease_EmptyBody(t *testing.T) {
+	mock := &mockHTTPDoer{
+		doFunc: func(req *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: 200,
+				Body:       io.NopCloser(bytes.NewBufferString("")),
+			}, nil
+		},
+	}
+	u := &Updater{http: mock}
+	_, err := u.FetchLatestRelease()
+	if err == nil {
+		t.Fatal("expected error for empty body")
+	}
+}
+
+func TestFetchReleaseByTag_InvalidJSON(t *testing.T) {
+	mock := &mockHTTPDoer{
+		doFunc: func(req *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: 200,
+				Body:       io.NopCloser(bytes.NewBufferString("invalid json")),
+			}, nil
+		},
+	}
+	u := &Updater{http: mock}
+	_, err := u.FetchReleaseByTag("v1.0.0")
+	if err == nil {
+		t.Fatal("expected error for invalid JSON response")
+	}
+}
+
+func TestFetchReleaseByTag_500Error(t *testing.T) {
+	mock := &mockHTTPDoer{
+		doFunc: func(req *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: 500,
+				Status:     "500 Internal Server Error",
+				Body:       io.NopCloser(bytes.NewBufferString("")),
+			}, nil
+		},
+	}
+	u := &Updater{http: mock}
+	_, err := u.FetchReleaseByTag("v1.0.0")
+	if err == nil {
+		t.Fatal("expected error for 500 response")
+	}
+}
+
+func TestFetchReleaseByTag_EmptyTag(t *testing.T) {
+	mock := &mockHTTPDoer{
+		doFunc: func(req *http.Request) (*http.Response, error) {
+			// Should still construct URL with empty tag
+			release := Release{TagName: "v0.0.0"}
+			data, _ := json.Marshal(release)
+			return &http.Response{
+				StatusCode: 200,
+				Body:       io.NopCloser(bytes.NewBuffer(data)),
+			}, nil
+		},
+	}
+	u := &Updater{http: mock}
+	release, err := u.FetchReleaseByTag("")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if release.TagName != "v0.0.0" {
+		t.Errorf("expected TagName 'v0.0.0', got %q", release.TagName)
+	}
+}

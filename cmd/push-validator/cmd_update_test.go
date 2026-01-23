@@ -435,6 +435,140 @@ func TestRunUpdateCore_SkipVerify(t *testing.T) {
 	}
 }
 
+func TestRunUpdateCore_PromptYes(t *testing.T) {
+	origOutput := flagOutput
+	origYes := flagYes
+	defer func() { flagOutput = origOutput; flagYes = origYes }()
+	flagOutput = "text"
+	flagYes = false
+
+	cfg := testCfg()
+	m := &mockCLIUpdater{
+		latestRelease: testRelease("v2.0.0"),
+		downloadData:  []byte("fake-archive"),
+		extractData:   []byte("fake-binary"),
+	}
+
+	prompter := &mockPrompter{interactive: true, responses: []string{"y"}}
+	err := runUpdateCore(m, cfg, updateCoreOpts{
+		currentVersion: "v1.0.0",
+		skipVerify:     true,
+	}, testPrinter(), prompter, io.Discard, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunUpdateCore_PromptEmpty(t *testing.T) {
+	origOutput := flagOutput
+	origYes := flagYes
+	defer func() { flagOutput = origOutput; flagYes = origYes }()
+	flagOutput = "text"
+	flagYes = false
+
+	cfg := testCfg()
+	m := &mockCLIUpdater{
+		latestRelease: testRelease("v2.0.0"),
+		downloadData:  []byte("fake-archive"),
+		extractData:   []byte("fake-binary"),
+	}
+
+	// Empty response (just Enter) should proceed
+	prompter := &mockPrompter{interactive: true, responses: []string{""}}
+	err := runUpdateCore(m, cfg, updateCoreOpts{
+		currentVersion: "v1.0.0",
+		skipVerify:     true,
+	}, testPrinter(), prompter, io.Discard, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunUpdateCore_PromptNo(t *testing.T) {
+	origOutput := flagOutput
+	origYes := flagYes
+	defer func() { flagOutput = origOutput; flagYes = origYes }()
+	flagOutput = "text"
+	flagYes = false
+
+	cfg := testCfg()
+	m := &mockCLIUpdater{latestRelease: testRelease("v2.0.0")}
+
+	prompter := &mockPrompter{interactive: true, responses: []string{"n"}}
+	err := runUpdateCore(m, cfg, updateCoreOpts{
+		currentVersion: "v1.0.0",
+	}, testPrinter(), prompter, io.Discard, nil)
+	if err != nil {
+		t.Fatal("expected nil (cancelled), got error:", err)
+	}
+}
+
+func TestRunUpdateCore_PromptError(t *testing.T) {
+	origOutput := flagOutput
+	origYes := flagYes
+	defer func() { flagOutput = origOutput; flagYes = origYes }()
+	flagOutput = "text"
+	flagYes = false
+
+	cfg := testCfg()
+	m := &mockCLIUpdater{latestRelease: testRelease("v2.0.0")}
+
+	// Empty responses slice causes ReadLine to return error
+	prompter := &mockPrompter{interactive: true, responses: []string{}}
+	err := runUpdateCore(m, cfg, updateCoreOpts{
+		currentVersion: "v1.0.0",
+	}, testPrinter(), prompter, io.Discard, nil)
+	if err != nil {
+		t.Fatal("expected nil (cancelled on prompt error), got error:", err)
+	}
+}
+
+func TestRunUpdateCore_EmptyChangelog(t *testing.T) {
+	origOutput := flagOutput
+	defer func() { flagOutput = origOutput }()
+	flagOutput = "text"
+
+	cfg := testCfg()
+	rel := testRelease("v2.0.0")
+	rel.Body = "" // empty changelog
+	m := &mockCLIUpdater{latestRelease: rel}
+
+	err := runUpdateCore(m, cfg, updateCoreOpts{
+		currentVersion: "v1.0.0",
+		checkOnly:      true,
+		force:          true,
+	}, testPrinter(), &nonInteractivePrompter{}, io.Discard, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunUpdateCore_AssetNotFound(t *testing.T) {
+	origOutput := flagOutput
+	origYes := flagYes
+	defer func() { flagOutput = origOutput; flagYes = origYes }()
+	flagOutput = "text"
+	flagYes = true
+
+	cfg := testCfg()
+	// Release with no matching asset for current platform
+	rel := &update.Release{
+		TagName: "v2.0.0",
+		Assets: []update.Asset{
+			{Name: "push-validator_2.0.0_windows_amd64.tar.gz", Size: 1024},
+		},
+	}
+	m := &mockCLIUpdater{latestRelease: rel}
+
+	err := runUpdateCore(m, cfg, updateCoreOpts{
+		currentVersion: "v1.0.0",
+		force:          true,
+	}, testPrinter(), &nonInteractivePrompter{}, io.Discard, nil)
+	if err == nil {
+		t.Fatal("expected error for missing platform asset")
+	}
+}
+
 func TestRunUpdateCore_LongChangelog(t *testing.T) {
 	origOutput := flagOutput
 	defer func() { flagOutput = origOutput }()

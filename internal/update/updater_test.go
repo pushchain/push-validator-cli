@@ -7,11 +7,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -921,16 +923,68 @@ func TestInstall_WriteError(t *testing.T) {
 	}
 }
 
-func TestInstall_ChmodError(t *testing.T) {
-	// This test is difficult to trigger reliably as chmod usually succeeds
-	// We document the coverage limitation here
-	t.Skip("chmod error path (line 216-218) is difficult to test reliably")
+func TestInstall_SuccessfulInstall(t *testing.T) {
+	// Explicitly test the full success path to ensure all lines are covered
+	dir := t.TempDir()
+	binPath := filepath.Join(dir, "push-validator")
+	os.WriteFile(binPath, []byte("old-binary"), 0o755)
+
+	u := &Updater{BinaryPath: binPath}
+	err := u.Install([]byte("new-binary-content"))
+	if err != nil {
+		t.Fatalf("Install() unexpected error: %v", err)
+	}
+
+	// Verify the new binary is in place
+	data, err := os.ReadFile(binPath)
+	if err != nil {
+		t.Fatalf("failed to read installed binary: %v", err)
+	}
+	if string(data) != "new-binary-content" {
+		t.Errorf("installed binary = %q, want %q", string(data), "new-binary-content")
+	}
+
+	// Verify backup was created with old content
+	backupData, err := os.ReadFile(binPath + ".backup")
+	if err != nil {
+		t.Fatalf("backup not found: %v", err)
+	}
+	if string(backupData) != "old-binary" {
+		t.Errorf("backup = %q, want %q", string(backupData), "old-binary")
+	}
+
+	// Verify permissions preserved
+	info, _ := os.Stat(binPath)
+	if info.Mode().Perm() != 0o755 {
+		t.Errorf("permissions = %o, want 0755", info.Mode().Perm())
+	}
 }
 
-func TestInstall_RenameError(t *testing.T) {
-	// This test is difficult to trigger reliably as rename usually succeeds
-	// in the same directory
-	t.Skip("rename error path (line 222-224) is difficult to test reliably")
+func TestInstall_CreateTempError(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("cannot test as root")
+	}
+	dir := t.TempDir()
+	binPath := filepath.Join(dir, "push-validator")
+	os.WriteFile(binPath, []byte("original"), 0o755)
+
+	// Make dir readonly so CreateTemp fails after backup succeeds
+	u := &Updater{BinaryPath: binPath}
+
+	// Create backup manually first so backup step succeeds
+	os.WriteFile(binPath+".backup", []byte("original"), 0o755)
+
+	// Now make dir readonly - CreateTemp will fail
+	os.Chmod(dir, 0o555)
+	defer os.Chmod(dir, 0o755)
+
+	err := u.Install([]byte("new"))
+	if err == nil {
+		t.Fatal("expected error for CreateTemp failure")
+	}
+	if !strings.Contains(err.Error(), "failed to create temp file") && !strings.Contains(err.Error(), "failed to create backup") {
+		t.Errorf("unexpected error: %v", err)
+	}
 }
 
 func TestCopyFile_DestinationWriteError(t *testing.T) {
@@ -1024,6 +1078,403 @@ func TestProgressReader(t *testing.T) {
 	if totalRead != int64(len(data)) {
 		t.Errorf("Total read = %d, want %d", totalRead, len(data))
 	}
+}
+
+// --- Additional coverage tests ---
+
+func TestInstall_BinaryNotFound(t *testing.T) {
+	u := &Updater{BinaryPath: "/nonexistent/binary/path"}
+	err := u.Install([]byte("data"))
+	if err == nil || !strings.Contains(err.Error(), "failed to stat current binary") {
+		t.Errorf("expected stat error, got: %v", err)
+	}
+}
+
+func TestInstall_BackupFailure(t *testing.T) {
+	dir := t.TempDir()
+	binPath := filepath.Join(dir, "push-validator")
+	os.WriteFile(binPath, []byte("original"), 0o755)
+
+	// Make the backup target path unwritable by removing write on dir
+	roDir := filepath.Join(dir, "readonly")
+	os.MkdirAll(roDir, 0o555)
+	binInRO := filepath.Join(roDir, "push-validator")
+	os.WriteFile(binInRO, []byte("original"), 0o755)
+	os.Chmod(roDir, 0o555)
+	defer os.Chmod(roDir, 0o755)
+
+	u := &Updater{BinaryPath: binInRO}
+	err := u.Install([]byte("new binary data"))
+	if err == nil {
+		t.Fatal("expected error due to backup failure")
+	}
+}
+
+func TestInstall_TempFileWriteAndCleanup(t *testing.T) {
+	dir := t.TempDir()
+	binPath := filepath.Join(dir, "push-validator")
+	os.WriteFile(binPath, []byte("original"), 0o755)
+
+	u := &Updater{BinaryPath: binPath}
+	err := u.Install([]byte("new binary data"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify install succeeded
+	data, _ := os.ReadFile(binPath)
+	if string(data) != "new binary data" {
+		t.Errorf("expected 'new binary data', got %q", string(data))
+	}
+}
+
+func TestInstall_PreservesPermissions_0700(t *testing.T) {
+	dir := t.TempDir()
+	binPath := filepath.Join(dir, "push-validator")
+	os.WriteFile(binPath, []byte("original"), 0o700)
+
+	u := &Updater{BinaryPath: binPath}
+	err := u.Install([]byte("new binary data"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	info, _ := os.Stat(binPath)
+	if info.Mode().Perm() != 0o700 {
+		t.Errorf("expected permissions 0700, got %o", info.Mode().Perm())
+	}
+}
+
+func TestInstall_BackupCreated(t *testing.T) {
+	dir := t.TempDir()
+	binPath := filepath.Join(dir, "push-validator")
+	os.WriteFile(binPath, []byte("original"), 0o755)
+
+	u := &Updater{BinaryPath: binPath}
+	err := u.Install([]byte("new"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify backup exists
+	backupData, err := os.ReadFile(binPath + ".backup")
+	if err != nil {
+		t.Fatalf("backup file not found: %v", err)
+	}
+	if string(backupData) != "original" {
+		t.Errorf("backup content = %q, want 'original'", string(backupData))
+	}
+}
+
+func TestInstall_EmptyBinaryData(t *testing.T) {
+	dir := t.TempDir()
+	binPath := filepath.Join(dir, "push-validator")
+	os.WriteFile(binPath, []byte("original"), 0o755)
+
+	u := &Updater{BinaryPath: binPath}
+	err := u.Install([]byte{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	data, _ := os.ReadFile(binPath)
+	if len(data) != 0 {
+		t.Errorf("expected empty file, got %d bytes", len(data))
+	}
+}
+
+func TestCheck_FetchError(t *testing.T) {
+	mock := &mockHTTPDoer{
+		doFunc: func(req *http.Request) (*http.Response, error) {
+			return nil, fmt.Errorf("network error")
+		},
+	}
+	u := &Updater{CurrentVersion: "v1.0.0", http: mock}
+	_, err := u.Check()
+	if err == nil || !strings.Contains(err.Error(), "network error") {
+		t.Errorf("expected network error, got: %v", err)
+	}
+}
+
+func TestCheck_VersionTrimming(t *testing.T) {
+	releaseJSON, _ := json.Marshal(Release{
+		TagName: "v2.0.0",
+		Assets: []Asset{
+			{Name: fmt.Sprintf("push-validator_%s_%s.tar.gz", runtime.GOOS, runtime.GOARCH)},
+		},
+	})
+	mock := &mockHTTPDoer{
+		doFunc: func(req *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: 200,
+				Body:       io.NopCloser(bytes.NewReader(releaseJSON)),
+			}, nil
+		},
+	}
+	u := &Updater{CurrentVersion: "v1.0.0", http: mock}
+	result, err := u.Check()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.CurrentVersion != "1.0.0" {
+		t.Errorf("expected CurrentVersion='1.0.0', got %q", result.CurrentVersion)
+	}
+	if result.LatestVersion != "2.0.0" {
+		t.Errorf("expected LatestVersion='2.0.0', got %q", result.LatestVersion)
+	}
+	if !result.UpdateAvailable {
+		t.Error("expected UpdateAvailable=true")
+	}
+}
+
+func TestCheck_SameVersion(t *testing.T) {
+	releaseJSON, _ := json.Marshal(Release{
+		TagName: "v1.0.0",
+		Assets: []Asset{
+			{Name: fmt.Sprintf("push-validator_%s_%s.tar.gz", runtime.GOOS, runtime.GOARCH)},
+		},
+	})
+	mock := &mockHTTPDoer{
+		doFunc: func(req *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: 200,
+				Body:       io.NopCloser(bytes.NewReader(releaseJSON)),
+			}, nil
+		},
+	}
+	u := &Updater{CurrentVersion: "v1.0.0", http: mock}
+	result, err := u.Check()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.UpdateAvailable {
+		t.Error("expected UpdateAvailable=false for same version")
+	}
+}
+
+func TestDownload_EmptyBody(t *testing.T) {
+	mock := &mockHTTPDoer{
+		doFunc: func(req *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: 200,
+				Body:       io.NopCloser(bytes.NewReader(nil)),
+			}, nil
+		},
+	}
+	u := &Updater{http: mock}
+	data, err := u.Download(&Asset{BrowserDownloadURL: "https://example.com/file.tar.gz"}, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(data) != 0 {
+		t.Errorf("expected empty data, got %d bytes", len(data))
+	}
+}
+
+func TestDownload_400StatusCode(t *testing.T) {
+	mock := &mockHTTPDoer{
+		doFunc: func(req *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: 400,
+				Status:     "400 Bad Request",
+				Body:       io.NopCloser(bytes.NewReader(nil)),
+			}, nil
+		},
+	}
+	u := &Updater{http: mock}
+	_, err := u.Download(&Asset{BrowserDownloadURL: "https://example.com/file.tar.gz"}, nil)
+	if err == nil || !strings.Contains(err.Error(), "400 Bad Request") {
+		t.Errorf("expected 400 error, got: %v", err)
+	}
+}
+
+func TestDownload_403StatusCode(t *testing.T) {
+	mock := &mockHTTPDoer{
+		doFunc: func(req *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: 403,
+				Status:     "403 Forbidden",
+				Body:       io.NopCloser(bytes.NewReader(nil)),
+			}, nil
+		},
+	}
+	u := &Updater{http: mock}
+	_, err := u.Download(&Asset{BrowserDownloadURL: "https://example.com/file.tar.gz"}, nil)
+	if err == nil || !strings.Contains(err.Error(), "403 Forbidden") {
+		t.Errorf("expected 403 error, got: %v", err)
+	}
+}
+
+func TestDownload_WithProgressCallback(t *testing.T) {
+	content := []byte("file content data here")
+	mock := &mockHTTPDoer{
+		doFunc: func(req *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode:    200,
+				Body:          io.NopCloser(bytes.NewReader(content)),
+				ContentLength: int64(len(content)),
+			}, nil
+		},
+	}
+	u := &Updater{http: mock}
+	progressCalls := 0
+	data, err := u.Download(&Asset{BrowserDownloadURL: "https://example.com/file.tar.gz"}, func(downloaded, total int64) {
+		progressCalls++
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(data) != string(content) {
+		t.Errorf("data mismatch")
+	}
+	if progressCalls == 0 {
+		t.Error("expected progress callback to be called")
+	}
+}
+
+func TestExtractBinary_CorruptGzip(t *testing.T) {
+	// Valid gzip header but corrupt data
+	corruptData := []byte{0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0xde, 0xad, 0xbe, 0xef}
+	u := &Updater{}
+	_, err := u.ExtractBinary(corruptData)
+	if err == nil {
+		t.Fatal("expected error for corrupt gzip data")
+	}
+}
+
+func TestExtractBinary_BinaryNotFirst(t *testing.T) {
+	// Create archive where push-validator is NOT the first file
+	files := map[string]string{
+		"README.md":      "readme content",
+		"LICENSE":        "license content",
+		"push-validator": "actual binary",
+	}
+
+	var buf bytes.Buffer
+	gzWriter := gzip.NewWriter(&buf)
+	tarWriter := tar.NewWriter(gzWriter)
+
+	// Write in specific order: README first, then binary
+	for _, name := range []string{"README.md", "LICENSE", "push-validator"} {
+		content := files[name]
+		header := &tar.Header{
+			Name:    name,
+			Mode:    0755,
+			Size:    int64(len(content)),
+			ModTime: time.Now(),
+		}
+		tarWriter.WriteHeader(header)
+		tarWriter.Write([]byte(content))
+	}
+	tarWriter.Close()
+	gzWriter.Close()
+
+	u := &Updater{}
+	data, err := u.ExtractBinary(buf.Bytes())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(data) != "actual binary" {
+		t.Errorf("expected 'actual binary', got %q", string(data))
+	}
+}
+
+func TestVerifyChecksum_ExtraWhitespace(t *testing.T) {
+	// Checksum file with tab-separated fields
+	archiveData := []byte("archive content")
+	hash := sha256.Sum256(archiveData)
+	expectedHash := hex.EncodeToString(hash[:])
+
+	checksumContent := fmt.Sprintf("%s\ttest-asset.tar.gz\n", expectedHash)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(checksumContent))
+	}))
+	defer server.Close()
+
+	u := &Updater{http: server.Client()}
+	release := &Release{
+		Assets: []Asset{
+			{Name: "checksums.txt", BrowserDownloadURL: server.URL},
+		},
+	}
+
+	// Tabs between hash and filename - Fields() splits on any whitespace
+	err := u.VerifyChecksum(archiveData, release, "test-asset.tar.gz")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestNewWith_NilHTTPDoer(t *testing.T) {
+	u, err := NewWith("v1.0.0", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if u.http == nil {
+		t.Error("expected default HTTP client to be set")
+	}
+	if u.CurrentVersion != "v1.0.0" {
+		t.Errorf("expected CurrentVersion='v1.0.0', got %q", u.CurrentVersion)
+	}
+}
+
+func TestNewWith_CustomHTTPDoer(t *testing.T) {
+	mock := &mockHTTPDoer{doFunc: func(req *http.Request) (*http.Response, error) { return nil, nil }}
+	u, err := NewWith("v2.0.0", mock)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if u.http != mock {
+		t.Error("expected custom HTTP doer to be used")
+	}
+}
+
+func TestNewWith_ResolvesSymlinks(t *testing.T) {
+	// Just verify it can create an updater (the symlink resolution uses os.Executable())
+	u, err := NewWith("v1.0.0", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if u.BinaryPath == "" {
+		t.Error("expected BinaryPath to be set")
+	}
+}
+
+func TestDownload_ReadErrorWithProgress(t *testing.T) {
+	// Trigger a read error while using the progressReader path
+	mock := &mockHTTPDoer{
+		doFunc: func(req *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode:    200,
+				ContentLength: 1000,
+				Body:          io.NopCloser(&errorReader{err: fmt.Errorf("read failed")}),
+			}, nil
+		},
+	}
+	u := &Updater{http: mock}
+	_, err := u.Download(&Asset{BrowserDownloadURL: "https://example.com/file.tar.gz"}, func(downloaded, total int64) {})
+	if err == nil || !strings.Contains(err.Error(), "failed to read download") {
+		t.Errorf("expected read error, got: %v", err)
+	}
+}
+
+func TestDownload_NewRequestError(t *testing.T) {
+	u := &Updater{http: &mockHTTPDoer{}}
+	// Invalid URL with control character will cause NewRequest to fail
+	_, err := u.Download(&Asset{BrowserDownloadURL: "http://invalid\x7f.com"}, nil)
+	if err == nil || !strings.Contains(err.Error(), "failed to create download request") {
+		t.Errorf("expected new request error, got: %v", err)
+	}
+}
+
+// errorReader always returns an error on Read
+type errorReader struct {
+	err error
+}
+
+func (r *errorReader) Read(p []byte) (n int, err error) {
+	return 0, r.err
 }
 
 // Helper function to create a tar.gz archive

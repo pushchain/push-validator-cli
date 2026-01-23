@@ -17,13 +17,21 @@ import (
 // handleReset stops the node (best-effort), clears chain data while
 // preserving the address book, and restarts the node. It emits JSON or text depending on --output.
 func handleReset(cfg config.Config, sup process.Supervisor, prompters ...Prompter) error {
-	p := getPrinter()
 	var prompter Prompter
 	if len(prompters) > 0 {
 		prompter = prompters[0]
 	} else {
 		prompter = &ttyPrompter{}
 	}
+	return handleResetWith(cfg, sup, prompter,
+		func() bool { return term.IsTerminal(int(os.Stdout.Fd())) },
+		func(opts admin.ResetOptions) error { return admin.Reset(opts) },
+	)
+}
+
+// handleResetWith is the testable core of handleReset with injectable dependencies.
+func handleResetWith(cfg config.Config, sup process.Supervisor, prompter Prompter, isTTY func() bool, resetFn func(admin.ResetOptions) error) error {
+	p := getPrinter()
 
 	// Require confirmation for destructive operation
 	if flagOutput != "json" && !flagYes {
@@ -43,7 +51,6 @@ func handleReset(cfg config.Config, sup process.Supervisor, prompters ...Prompte
 
 	// Stop node first and verify it stopped
 	if wasRunning {
-		p := getPrinter()
 		if flagOutput != "json" {
 			fmt.Println(p.Colors.Info("Stopping node..."))
 		}
@@ -59,7 +66,7 @@ func handleReset(cfg config.Config, sup process.Supervisor, prompters ...Prompte
 		}
 	}
 
-	showSpinner := flagOutput != "json" && term.IsTerminal(int(os.Stdout.Fd()))
+	showSpinner := flagOutput != "json" && isTTY()
 	var (
 		spinnerStop   chan struct{}
 		spinnerTicker *time.Ticker
@@ -82,7 +89,7 @@ func handleReset(cfg config.Config, sup process.Supervisor, prompters ...Prompte
 		}()
 	}
 
-	err := admin.Reset(admin.ResetOptions{
+	err := resetFn(admin.ResetOptions{
 		HomeDir:      cfg.HomeDir,
 		BinPath:      findPchaind(),
 		KeepAddrBook: true,

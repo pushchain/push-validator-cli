@@ -1,8 +1,10 @@
 package main
 
 import (
+	"fmt"
 	"testing"
 
+	"github.com/pushchain/push-validator-cli/internal/admin"
 	"github.com/pushchain/push-validator-cli/internal/config"
 )
 
@@ -478,4 +480,314 @@ func TestHandleReset_WithYes_RunningNode_StopError_JSON(t *testing.T) {
 	err := handleReset(cfg, sup)
 	// Should not return the stop error itself - reset continues
 	_ = err
+}
+
+// --- Tests using handleResetWith with injectable deps ---
+
+func TestHandleResetWith_PrompterError_Cancels(t *testing.T) {
+	origOutput := flagOutput
+	origYes := flagYes
+	origNonInteractive := flagNonInteractive
+	origNoColor := flagNoColor
+	origNoEmoji := flagNoEmoji
+	defer func() {
+		flagOutput = origOutput
+		flagYes = origYes
+		flagNonInteractive = origNonInteractive
+		flagNoColor = origNoColor
+		flagNoEmoji = origNoEmoji
+	}()
+	flagOutput = "text"
+	flagYes = false
+	flagNonInteractive = false
+	flagNoColor = true
+	flagNoEmoji = true
+
+	cfg := config.Config{HomeDir: t.TempDir()}
+	sup := &mockSupervisor{running: false}
+	prompter := &mockPrompter{responses: []string{}} // no responses = error
+
+	resetCalled := false
+	err := handleResetWith(cfg, sup, prompter,
+		func() bool { return false },
+		func(opts admin.ResetOptions) error { resetCalled = true; return nil },
+	)
+	if err != nil {
+		t.Fatalf("expected nil (cancelled), got: %v", err)
+	}
+	if resetCalled {
+		t.Error("expected reset NOT to be called when prompter errors")
+	}
+}
+
+func TestHandleResetWith_NotRunning_NoSpinner(t *testing.T) {
+	origOutput := flagOutput
+	origYes := flagYes
+	origNoColor := flagNoColor
+	origNoEmoji := flagNoEmoji
+	defer func() {
+		flagOutput = origOutput
+		flagYes = origYes
+		flagNoColor = origNoColor
+		flagNoEmoji = origNoEmoji
+	}()
+	flagOutput = "text"
+	flagYes = true
+	flagNoColor = true
+	flagNoEmoji = true
+
+	cfg := config.Config{HomeDir: t.TempDir()}
+	sup := &mockSupervisor{running: false}
+
+	resetCalled := false
+	err := handleResetWith(cfg, sup, &mockPrompter{},
+		func() bool { return false }, // non-TTY, no spinner
+		func(opts admin.ResetOptions) error { resetCalled = true; return nil },
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !resetCalled {
+		t.Error("expected reset to be called")
+	}
+}
+
+func TestHandleResetWith_ResetError_JSON(t *testing.T) {
+	origOutput := flagOutput
+	origYes := flagYes
+	defer func() {
+		flagOutput = origOutput
+		flagYes = origYes
+	}()
+	flagOutput = "json"
+	flagYes = false
+
+	cfg := config.Config{HomeDir: t.TempDir()}
+	sup := &mockSupervisor{running: false}
+
+	err := handleResetWith(cfg, sup, &mockPrompter{},
+		func() bool { return false },
+		func(opts admin.ResetOptions) error { return fmt.Errorf("reset failed") },
+	)
+	if err == nil || err.Error() != "reset failed" {
+		t.Errorf("expected 'reset failed', got: %v", err)
+	}
+}
+
+func TestHandleResetWith_ResetError_Text(t *testing.T) {
+	origOutput := flagOutput
+	origYes := flagYes
+	origNoColor := flagNoColor
+	origNoEmoji := flagNoEmoji
+	defer func() {
+		flagOutput = origOutput
+		flagYes = origYes
+		flagNoColor = origNoColor
+		flagNoEmoji = origNoEmoji
+	}()
+	flagOutput = "text"
+	flagYes = true
+	flagNoColor = true
+	flagNoEmoji = true
+
+	cfg := config.Config{HomeDir: t.TempDir()}
+	sup := &mockSupervisor{running: false}
+
+	err := handleResetWith(cfg, sup, &mockPrompter{},
+		func() bool { return false },
+		func(opts admin.ResetOptions) error { return fmt.Errorf("reset failed") },
+	)
+	if err == nil || err.Error() != "reset failed" {
+		t.Errorf("expected 'reset failed', got: %v", err)
+	}
+}
+
+func TestHandleResetWith_Success_JSON(t *testing.T) {
+	origOutput := flagOutput
+	origYes := flagYes
+	defer func() {
+		flagOutput = origOutput
+		flagYes = origYes
+	}()
+	flagOutput = "json"
+	flagYes = false
+
+	cfg := config.Config{HomeDir: t.TempDir()}
+	sup := &mockSupervisor{running: false}
+
+	err := handleResetWith(cfg, sup, &mockPrompter{},
+		func() bool { return false },
+		func(opts admin.ResetOptions) error { return nil },
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestHandleResetWith_Success_Text(t *testing.T) {
+	origOutput := flagOutput
+	origYes := flagYes
+	origNoColor := flagNoColor
+	origNoEmoji := flagNoEmoji
+	defer func() {
+		flagOutput = origOutput
+		flagYes = origYes
+		flagNoColor = origNoColor
+		flagNoEmoji = origNoEmoji
+	}()
+	flagOutput = "text"
+	flagYes = true
+	flagNoColor = true
+	flagNoEmoji = true
+
+	cfg := config.Config{HomeDir: t.TempDir()}
+	sup := &mockSupervisor{running: false}
+
+	err := handleResetWith(cfg, sup, &mockPrompter{},
+		func() bool { return false },
+		func(opts admin.ResetOptions) error { return nil },
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestHandleResetWith_Spinner_Success(t *testing.T) {
+	origOutput := flagOutput
+	origYes := flagYes
+	origNoColor := flagNoColor
+	origNoEmoji := flagNoEmoji
+	defer func() {
+		flagOutput = origOutput
+		flagYes = origYes
+		flagNoColor = origNoColor
+		flagNoEmoji = origNoEmoji
+	}()
+	flagOutput = "text"
+	flagYes = true
+	flagNoColor = true
+	flagNoEmoji = true
+
+	cfg := config.Config{HomeDir: t.TempDir()}
+	sup := &mockSupervisor{running: false}
+
+	err := handleResetWith(cfg, sup, &mockPrompter{},
+		func() bool { return true }, // TTY = show spinner
+		func(opts admin.ResetOptions) error { return nil },
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestHandleResetWith_Spinner_ResetError(t *testing.T) {
+	origOutput := flagOutput
+	origYes := flagYes
+	origNoColor := flagNoColor
+	origNoEmoji := flagNoEmoji
+	defer func() {
+		flagOutput = origOutput
+		flagYes = origYes
+		flagNoColor = origNoColor
+		flagNoEmoji = origNoEmoji
+	}()
+	flagOutput = "text"
+	flagYes = true
+	flagNoColor = true
+	flagNoEmoji = true
+
+	cfg := config.Config{HomeDir: t.TempDir()}
+	sup := &mockSupervisor{running: false}
+
+	err := handleResetWith(cfg, sup, &mockPrompter{},
+		func() bool { return true }, // TTY = show spinner
+		func(opts admin.ResetOptions) error { return fmt.Errorf("spinner reset error") },
+	)
+	if err == nil || err.Error() != "spinner reset error" {
+		t.Errorf("expected 'spinner reset error', got: %v", err)
+	}
+}
+
+func TestHandleResetWith_StopError_JSON(t *testing.T) {
+	origOutput := flagOutput
+	origYes := flagYes
+	defer func() {
+		flagOutput = origOutput
+		flagYes = origYes
+	}()
+	flagOutput = "json"
+	flagYes = false
+
+	cfg := config.Config{HomeDir: t.TempDir()}
+	sup := &mockSupervisor{running: true, stopErr: errMock}
+
+	err := handleResetWith(cfg, sup, &mockPrompter{},
+		func() bool { return false },
+		func(opts admin.ResetOptions) error { return nil },
+	)
+	// Stop error in reset is non-fatal, reset should still proceed
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestHandleResetWith_StopError_Text(t *testing.T) {
+	origOutput := flagOutput
+	origYes := flagYes
+	origNoColor := flagNoColor
+	origNoEmoji := flagNoEmoji
+	defer func() {
+		flagOutput = origOutput
+		flagYes = origYes
+		flagNoColor = origNoColor
+		flagNoEmoji = origNoEmoji
+	}()
+	flagOutput = "text"
+	flagYes = true
+	flagNoColor = true
+	flagNoEmoji = true
+
+	cfg := config.Config{HomeDir: t.TempDir()}
+	sup := &mockSupervisor{running: true, stopErr: errMock}
+
+	err := handleResetWith(cfg, sup, &mockPrompter{},
+		func() bool { return false },
+		func(opts admin.ResetOptions) error { return nil },
+	)
+	// Stop error is warned but reset continues
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestHandleResetWith_VerifiesResetOpts(t *testing.T) {
+	origOutput := flagOutput
+	origYes := flagYes
+	defer func() {
+		flagOutput = origOutput
+		flagYes = origYes
+	}()
+	flagOutput = "json"
+	flagYes = false
+
+	cfg := config.Config{HomeDir: "/my/home"}
+	sup := &mockSupervisor{running: false}
+
+	var capturedOpts admin.ResetOptions
+	err := handleResetWith(cfg, sup, &mockPrompter{},
+		func() bool { return false },
+		func(opts admin.ResetOptions) error {
+			capturedOpts = opts
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if capturedOpts.HomeDir != "/my/home" {
+		t.Errorf("expected HomeDir=/my/home, got %s", capturedOpts.HomeDir)
+	}
+	if !capturedOpts.KeepAddrBook {
+		t.Error("expected KeepAddrBook=true")
+	}
 }

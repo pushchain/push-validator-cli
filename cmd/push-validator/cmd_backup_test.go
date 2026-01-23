@@ -1,7 +1,10 @@
 package main
 
 import (
+	"fmt"
 	"testing"
+
+	"github.com/pushchain/push-validator-cli/internal/admin"
 )
 
 func TestHandleBackup_Success(t *testing.T) {
@@ -109,5 +112,120 @@ func TestHandleBackup_Success_Text(t *testing.T) {
 	err := handleBackup(d)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// --- Tests using handleBackupWith with injectable backup function ---
+
+func TestHandleBackupWith_Success_JSON(t *testing.T) {
+	origOutput := flagOutput
+	defer func() { flagOutput = origOutput }()
+	flagOutput = "json"
+
+	d := &Deps{
+		Cfg:     testCfg(),
+		Printer: getPrinter(),
+	}
+
+	err := handleBackupWith(d, func(opts admin.BackupOptions) (string, error) {
+		return "/tmp/backup.tar.gz", nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestHandleBackupWith_Success_Text(t *testing.T) {
+	origOutput := flagOutput
+	origNoColor := flagNoColor
+	origNoEmoji := flagNoEmoji
+	defer func() {
+		flagOutput = origOutput
+		flagNoColor = origNoColor
+		flagNoEmoji = origNoEmoji
+	}()
+	flagOutput = "text"
+	flagNoColor = true
+	flagNoEmoji = true
+
+	d := &Deps{
+		Cfg:     testCfg(),
+		Printer: getPrinter(),
+	}
+
+	err := handleBackupWith(d, func(opts admin.BackupOptions) (string, error) {
+		return "/tmp/backup.tar.gz", nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestHandleBackupWith_Error_JSON(t *testing.T) {
+	origOutput := flagOutput
+	defer func() { flagOutput = origOutput }()
+	flagOutput = "json"
+
+	d := &Deps{
+		Cfg:     testCfg(),
+		Printer: getPrinter(),
+	}
+
+	err := handleBackupWith(d, func(opts admin.BackupOptions) (string, error) {
+		return "", fmt.Errorf("disk full")
+	})
+	if err == nil || err.Error() != "disk full" {
+		t.Errorf("expected 'disk full', got: %v", err)
+	}
+}
+
+func TestHandleBackupWith_Error_Text(t *testing.T) {
+	origOutput := flagOutput
+	origNoColor := flagNoColor
+	origNoEmoji := flagNoEmoji
+	defer func() {
+		flagOutput = origOutput
+		flagNoColor = origNoColor
+		flagNoEmoji = origNoEmoji
+	}()
+	flagOutput = "text"
+	flagNoColor = true
+	flagNoEmoji = true
+
+	d := &Deps{
+		Cfg:     testCfg(),
+		Printer: getPrinter(),
+	}
+
+	err := handleBackupWith(d, func(opts admin.BackupOptions) (string, error) {
+		return "", fmt.Errorf("permission denied")
+	})
+	if err == nil || err.Error() != "permission denied" {
+		t.Errorf("expected 'permission denied', got: %v", err)
+	}
+}
+
+func TestHandleBackupWith_VerifiesHomeDir(t *testing.T) {
+	origOutput := flagOutput
+	defer func() { flagOutput = origOutput }()
+	flagOutput = "json"
+
+	cfg := testCfg()
+	cfg.HomeDir = "/custom/home"
+	d := &Deps{
+		Cfg:     cfg,
+		Printer: getPrinter(),
+	}
+
+	var capturedOpts admin.BackupOptions
+	err := handleBackupWith(d, func(opts admin.BackupOptions) (string, error) {
+		capturedOpts = opts
+		return "/backup.tar.gz", nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if capturedOpts.HomeDir != "/custom/home" {
+		t.Errorf("expected HomeDir=/custom/home, got %s", capturedOpts.HomeDir)
 	}
 }

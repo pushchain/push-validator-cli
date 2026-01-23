@@ -226,3 +226,29 @@ func TestSaveCache_OverwriteExisting(t *testing.T) {
 		t.Errorf("LatestVersion = %v, want 2.0.0", loaded.LatestVersion)
 	}
 }
+
+func TestSaveCache_NonexistentDirectory(t *testing.T) {
+	err := SaveCache("/nonexistent/path/to/dir", &CacheEntry{
+		CheckedAt:       time.Now(),
+		LatestVersion:   "1.0.0",
+		UpdateAvailable: false,
+	})
+	if err == nil {
+		t.Fatal("expected error writing to non-existent directory")
+	}
+}
+
+func TestSaveCache_ReadonlyDirectory(t *testing.T) {
+	dir := t.TempDir()
+	os.Chmod(dir, 0o555)
+	defer os.Chmod(dir, 0o755)
+
+	err := SaveCache(dir, &CacheEntry{
+		CheckedAt:       time.Now(),
+		LatestVersion:   "1.0.0",
+		UpdateAvailable: false,
+	})
+	if err == nil {
+		t.Fatal("expected error writing to readonly directory")
+	}
+}
