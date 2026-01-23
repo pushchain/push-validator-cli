@@ -96,10 +96,13 @@ func (s *CosmovisorSupervisor) Stop() error {
 		return nil
 	}
 
-	// Try graceful TERM
-	_ = syscall.Kill(pid, syscall.SIGTERM)
+	// Try graceful TERM to the process group first (kills cosmovisor + children),
+	// fall back to individual PID if group kill fails.
+	if err := syscall.Kill(-pid, syscall.SIGTERM); err != nil {
+		_ = syscall.Kill(pid, syscall.SIGTERM)
+	}
 
-	// Wait up to 15 seconds
+	// Wait up to 15 seconds for graceful shutdown
 	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		if !processAlive(pid) {
@@ -109,12 +112,23 @@ func (s *CosmovisorSupervisor) Stop() error {
 		time.Sleep(300 * time.Millisecond)
 	}
 
-	// Force kill
-	_ = syscall.Kill(pid, syscall.SIGKILL)
-	time.Sleep(500 * time.Millisecond)
+	// Force kill the process group, fall back to individual PID
+	if err := syscall.Kill(-pid, syscall.SIGKILL); err != nil {
+		_ = syscall.Kill(pid, syscall.SIGKILL)
+	}
 
 	// Also kill any orphaned pchaind processes
 	_ = exec.Command("pkill", "-f", "pchaind start").Run()
+
+	// Poll for process death after SIGKILL (up to 5 seconds)
+	killDeadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(killDeadline) {
+		if !processAlive(pid) {
+			_ = os.Remove(s.pidFile)
+			return nil
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
 
 	_ = os.Remove(s.pidFile)
 	if processAlive(pid) {
@@ -197,15 +211,15 @@ func (s *CosmovisorSupervisor) Start(opts StartOpts) (int, error) {
 			_ = err
 		}
 
-		// Ensure priv_validator_state.json exists after reset
-		pvsPath := filepath.Join(opts.HomeDir, "data", "priv_validator_state.json")
-		if _, err := os.Stat(pvsPath); os.IsNotExist(err) {
-			_ = os.MkdirAll(filepath.Join(opts.HomeDir, "data"), 0o755)
-			_ = os.WriteFile(pvsPath, []byte(`{"height":"0","round":0,"step":0}`), 0o644)
-		}
-
 		// Remove the marker file after processing
 		_ = os.Remove(needsInitialSyncPath)
+	}
+
+	// Always ensure priv_validator_state.json exists before starting
+	pvsPath := filepath.Join(opts.HomeDir, "data", "priv_validator_state.json")
+	if _, err := os.Stat(pvsPath); os.IsNotExist(err) {
+		_ = os.MkdirAll(filepath.Join(opts.HomeDir, "data"), 0o755)
+		_ = os.WriteFile(pvsPath, []byte(`{"height":"0","round":0,"step":0}`), 0o644)
 	}
 
 	// Ensure logs directory exists

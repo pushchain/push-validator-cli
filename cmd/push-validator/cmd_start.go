@@ -101,6 +101,39 @@ var startCmd = &cobra.Command{
 			}
 		}
 
+		// If node is initialized but data is empty (e.g., post-reset), restore snapshot
+		if !needsInit && !snapshot.IsSnapshotPresent(cfg.HomeDir) {
+			if flagOutput != "json" {
+				p.Info("No blockchain data found — restoring from snapshot...")
+				fmt.Println()
+			}
+			snapshotSvc := snapshot.New()
+			if err := snapshotSvc.Download(cmd.Context(), snapshot.Options{
+				SnapshotURL: cfg.SnapshotURL,
+				HomeDir:     cfg.HomeDir,
+				Progress:    createSnapshotProgressCallback(flagOutput),
+			}); err != nil {
+				return fmt.Errorf("download snapshot: %w", err)
+			}
+			if err := snapshotSvc.Extract(cmd.Context(), snapshot.ExtractOptions{
+				HomeDir:   cfg.HomeDir,
+				TargetDir: filepath.Join(cfg.HomeDir, "data"),
+				Progress:  createSnapshotProgressCallback(flagOutput),
+			}); err != nil {
+				return fmt.Errorf("extract snapshot: %w", err)
+			}
+			// Ensure priv_validator_state.json exists after extraction
+			pvsPath := filepath.Join(cfg.HomeDir, "data", "priv_validator_state.json")
+			if _, err := os.Stat(pvsPath); os.IsNotExist(err) {
+				_ = os.WriteFile(pvsPath, []byte(`{"height":"0","round":0,"step":0}` + "\n"), 0o644)
+			}
+			if flagOutput != "json" {
+				fmt.Println()
+				p.Success("Snapshot restored")
+				fmt.Println()
+			}
+		}
+
 		// Verify cosmovisor is available
 		detection := cosmovisor.Detect(cfg.HomeDir)
 		if !detection.Available {
@@ -226,10 +259,20 @@ func handlePostStartFlow(cfg config.Config, p *ui.Printer) bool {
 				return fmt.Errorf("reset failed: %w", err)
 			}
 
-			// Recreate priv_validator_state.json
-			pvs := filepath.Join(cfg.HomeDir, "data", "priv_validator_state.json")
-			if err := os.WriteFile(pvs, []byte("{\n  \"height\": \"0\",\n  \"round\": 0,\n  \"step\": 0\n}\n"), 0o644); err != nil {
-				return fmt.Errorf("failed to create priv_validator_state.json: %w", err)
+			// Restore snapshot before restarting (node cannot start from genesis)
+			fmt.Println(p.Colors.Info("    Restoring snapshot..."))
+			snapshotSvc := snapshot.New()
+			if err := snapshotSvc.Download(context.Background(), snapshot.Options{
+				SnapshotURL: cfg.SnapshotURL,
+				HomeDir:     cfg.HomeDir,
+			}); err != nil {
+				return fmt.Errorf("snapshot download failed: %w", err)
+			}
+			if err := snapshotSvc.Extract(context.Background(), snapshot.ExtractOptions{
+				HomeDir:   cfg.HomeDir,
+				TargetDir: filepath.Join(cfg.HomeDir, "data"),
+			}); err != nil {
+				return fmt.Errorf("snapshot extract failed: %w", err)
 			}
 
 			fmt.Println(p.Colors.Info("    Restarting node..."))
@@ -244,9 +287,6 @@ func handlePostStartFlow(cfg config.Config, p *ui.Printer) bool {
 			time.Sleep(5 * time.Second) // Give node time to initialize
 			return nil
 		}
-
-		// Note: With snapshot download, we don't need state sync reconfigure.
-		// The node already has data from the snapshot and just needs to catch up via block sync.
 
 		if err := syncmon.RunWithRetry(context.Background(), syncmon.RetryOptions{
 			Options: syncmon.Options{
@@ -432,9 +472,9 @@ func checkValidatorRegistration(v validator.Service, maxRetries int) valCheckRes
 type postStartAction string
 
 const (
-	actionShowDashboard   postStartAction = "show_dashboard"
-	actionPromptRegister  postStartAction = "prompt_register"
-	actionShowSteps       postStartAction = "show_steps"
+	actionShowDashboard  postStartAction = "show_dashboard"
+	actionPromptRegister postStartAction = "prompt_register"
+	actionShowSteps      postStartAction = "show_steps"
 )
 
 // computePostStartDecision determines what to do based on validator check results and interactivity.

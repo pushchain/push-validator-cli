@@ -9,7 +9,6 @@ import (
 	"os/exec"
 	"strings"
 	"time"
-	"unicode"
 
 	"golang.org/x/term"
 )
@@ -17,7 +16,6 @@ import (
 // LogUIOptions configures the TUI log viewer
 type LogUIOptions struct {
 	LogPath    string // Path to pchaind.log
-	BgKey      byte   // Key to background (default: 'b')
 	ShowFooter bool   // Enable footer (default: true)
 	NoColor    bool   // Respect --no-color
 }
@@ -48,11 +46,7 @@ func RunLogUIV2(ctx context.Context, opts LogUIOptions) error {
 	time.Sleep(10 * time.Millisecond)
 
 	// 4. Print minimal controls banner (keeps existing scrollback intact)
-	if opts.BgKey == 0 {
-		opts.BgKey = 'b'
-	}
-	bgLabel := fmt.Sprintf("%c", opts.BgKey)
-	footerRaw := fmt.Sprintf("Controls: Ctrl+C to stop node | '%s' to run in background", bgLabel)
+	footerRaw := "Controls: Ctrl+C to exit logs"
 	if cols > 0 && len(footerRaw) > cols {
 		footerRaw = footerRaw[:cols]
 	}
@@ -108,13 +102,7 @@ func RunLogUIV2(ctx context.Context, opts LogUIOptions) error {
 		case err := <-logDone:
 			return err
 		case key := <-keyDone:
-			upperBg := byte(unicode.ToUpper(rune(opts.BgKey)))
-			switch key {
-			case 3: // Ctrl+C
-				fmt.Fprint(os.Stdout, "\r\nStopping node...\r\n")
-				stopNodeSimple()
-				return nil
-			case opts.BgKey, upperBg:
+			if key == 3 { // Ctrl+C
 				return nil
 			}
 		}
@@ -223,15 +211,6 @@ func printRecentLines(f *os.File, out io.Writer, maxLines int, onPrint func()) e
 		}
 	}
 	return nil
-}
-
-func stopNodeSimple() {
-	exe, _ := os.Executable()
-	if exe == "" {
-		exe = "push-validator"
-	}
-	cmd := exec.Command(exe, "stop")
-	cmd.Run()
 }
 
 func tailFollowSimple(ctx context.Context, logPath string) error {

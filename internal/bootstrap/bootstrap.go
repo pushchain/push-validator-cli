@@ -197,6 +197,15 @@ func (s *svc) Init(ctx context.Context, opts Options) error {
 			return fmt.Errorf("download snapshot: %w", err)
 		}
 
+		progress("Extracting snapshot...")
+		if err := s.snapshot.Extract(ctx, snapshot.ExtractOptions{
+			HomeDir:   opts.HomeDir,
+			TargetDir: filepath.Join(opts.HomeDir, "data"),
+			Progress:  opts.SnapshotProgress,
+		}); err != nil {
+			return fmt.Errorf("extract snapshot: %w", err)
+		}
+
 		// Mark successful snapshot download
 		_ = os.WriteFile(filepath.Join(opts.HomeDir, ".snapshot_downloaded"), []byte(time.Now().Format(time.RFC3339)), 0o644)
 

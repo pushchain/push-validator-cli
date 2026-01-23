@@ -21,7 +21,7 @@ import (
 type Options struct {
 	LocalRPC     string
 	RemoteRPC    string
-	LogPath      string        // Kept for compatibility but no longer used for state sync
+	LogPath      string // Kept for compatibility but no longer used for state sync
 	Window       int
 	Compact      bool
 	Out          io.Writer     // default os.Stdout
@@ -57,6 +57,9 @@ func Run(ctx context.Context, opts Options) error {
 		opts.StuckTimeout = defaultStuckTimeout
 	}
 	lastProgress := newAtomicTime(time.Now())
+	var rpcFailStart time.Time // zero = not failing
+	const rpcFailTimeout = 30 * time.Second
+	var lastTickHeight int64
 
 	tty := isTTY()
 	if opts.Quiet {
@@ -173,7 +176,17 @@ func Run(ctx context.Context, opts Options) error {
 			}
 		case h, ok := <-headers:
 			if !ok {
-				return nil
+				// Channel closed — WS disconnected (timeout or node died).
+				if isNodeAlive(opts.LocalRPC) {
+					// Node is alive but WS timed out (normal during block sync).
+					// Fall back to tick-based progress monitoring only.
+					headers = nil // nil channel blocks forever in select
+					break
+				}
+				if isSyncedQuick(opts.LocalRPC) {
+					return nil
+				}
+				return ErrSyncStuck
 			}
 			lastProgress.Update()
 			buf = append(buf, pt{h.Height, time.Now()})
@@ -271,33 +284,115 @@ func Run(ctx context.Context, opts Options) error {
 			ctx2, cancel2 := context.WithTimeout(context.Background(), 800*time.Millisecond)
 			st, err := cli.Status(ctx2)
 			cancel2()
-			if err == nil {
-				// If we haven't printed any bar yet (e.g., already synced), render a final bar once
-				if !barPrinted {
-					cur := st.Height
+			if err != nil {
+				// RPC failed — track wall-clock time of continuous failure
+				if rpcFailStart.IsZero() {
+					rpcFailStart = time.Now()
+				}
+				if time.Since(rpcFailStart) > rpcFailTimeout {
+					if tty {
+						fmt.Fprint(opts.Out, "\r\033[K")
+					}
+					return ErrSyncStuck
+				}
+				break
+			}
+			rpcFailStart = time.Time{} // reset on success
+			if st.Height > lastTickHeight {
+				lastProgress.Update()
+				lastTickHeight = st.Height
+			}
+			// If we haven't printed any bar yet (e.g., already synced), render a final bar once
+			if !barPrinted {
+				cur := st.Height
+				remoteH := lastRemote
+				if remoteH == 0 { // quick remote probe
+					remoteH = probeRemoteOnce(opts.RemoteRPC, cur)
+				}
+				if remoteH < cur {
+					remoteH = cur
+				}
+				// If already synced but local height not yet reported, align to remote
+				if !st.CatchingUp && cur < remoteH {
+					cur = remoteH
+				}
+				// Avoid printing a misleading bar when cur is 0; wait for actual height
+				if cur == 0 {
+					break
+				}
+				var percent float64
+				if remoteH > 0 {
+					percent = float64(cur) / float64(remoteH) * 100
+				}
+				percent = floor2(percent)
+				if cur < remoteH && percent >= 100 {
+					percent = 99.99
+				}
+				line := renderProgressWithQuiet(percent, cur, remoteH, opts.Quiet)
+				rate, eta := progressRateAndETA(buf, cur, remoteH)
+				lineWithETA := line
+				if eta != "" {
+					lineWithETA += eta
+				}
+				if tty {
+					extra := ""
+					if lastPeers > 0 {
+						extra += fmt.Sprintf("  peers: %d", lastPeers)
+					}
+					if lastLatency > 0 {
+						extra += fmt.Sprintf("  rtt: %dms", lastLatency)
+					}
+					fmt.Fprintf(opts.Out, "\r\033[K  %s%s", lineWithETA, extra)
+				} else {
+					if opts.Quiet {
+						fmt.Fprintf(opts.Out, "height=%d/%d rate=%.2f%s peers=%d rtt=%dms\n", cur, remoteH, rate, eta, lastPeers, lastLatency)
+					} else {
+						fmt.Fprintf(opts.Out, "%s height=%d/%d rate=%.2f blk/s%s peers=%d rtt=%dms\n", time.Now().Format(time.Kitchen), cur, remoteH, rate, eta, lastPeers, lastLatency)
+					}
+				}
+				firstBarTime = time.Now()
+				holdStarted = true
+				barPrinted = true
+				if baseH == 0 && cur > 0 {
+					baseH = cur
+					baseRemote = remoteH
+				}
+			}
+			// Active sync: update progress bar on every tick using current RPC status
+			if st.CatchingUp && barPrinted {
+				cur := st.Height
+				if cur > 0 {
+					// Add current height to buffer for rate calculation
+					buf = append(buf, pt{cur, time.Now()})
+					if len(buf) > opts.Window {
+						buf = buf[1:]
+					}
+					// Calculate progress using baseline logic
 					remoteH := lastRemote
-					if remoteH == 0 { // quick remote probe
+					if remoteH == 0 {
 						remoteH = probeRemoteOnce(opts.RemoteRPC, cur)
 					}
 					if remoteH < cur {
 						remoteH = cur
-					}
-					// If already synced but local height not yet reported, align to remote
-					if !st.CatchingUp && cur < remoteH {
-						cur = remoteH
-					}
-					// Avoid printing a misleading bar when cur is 0; wait for actual height
-					if cur == 0 {
-						break
 					}
 					var percent float64
 					if remoteH > 0 {
-						percent = float64(cur) / float64(remoteH) * 100
+						// Use baseline calculation for meaningful progress tracking
+						if baseH > 0 && remoteH > baseH && (remoteH-baseH) > 100 {
+							denom := float64(remoteH - baseH)
+							if denom > 0 {
+								percent = float64(cur-baseH) / denom * 100
+							}
+						} else {
+							// Direct calculation for near-synced nodes
+							percent = float64(cur) / float64(remoteH) * 100
+						}
 					}
 					percent = floor2(percent)
 					if cur < remoteH && percent >= 100 {
 						percent = 99.99
 					}
+					// Render progress bar with current stats
 					line := renderProgressWithQuiet(percent, cur, remoteH, opts.Quiet)
 					rate, eta := progressRateAndETA(buf, cur, remoteH)
 					lineWithETA := line
@@ -320,160 +415,94 @@ func Run(ctx context.Context, opts Options) error {
 							fmt.Fprintf(opts.Out, "%s height=%d/%d rate=%.2f blk/s%s peers=%d rtt=%dms\n", time.Now().Format(time.Kitchen), cur, remoteH, rate, eta, lastPeers, lastLatency)
 						}
 					}
-					firstBarTime = time.Now()
-					holdStarted = true
-					barPrinted = true
-					if baseH == 0 && cur > 0 {
-						baseH = cur
-						baseRemote = remoteH
-					}
 				}
-				// Active sync: update progress bar on every tick using current RPC status
-				if st.CatchingUp && barPrinted {
-					cur := st.Height
-					if cur > 0 {
-						// Add current height to buffer for rate calculation
-						buf = append(buf, pt{cur, time.Now()})
-						if len(buf) > opts.Window {
-							buf = buf[1:]
-						}
-						// Calculate progress using baseline logic
-						remoteH := lastRemote
-						if remoteH == 0 {
-							remoteH = probeRemoteOnce(opts.RemoteRPC, cur)
-						}
-						if remoteH < cur {
-							remoteH = cur
-						}
-						var percent float64
-						if remoteH > 0 {
-							// Use baseline calculation for meaningful progress tracking
-							if baseH > 0 && remoteH > baseH && (remoteH-baseH) > 100 {
-								denom := float64(remoteH - baseH)
-								if denom > 0 {
-									percent = float64(cur-baseH) / denom * 100
-								}
-							} else {
-								// Direct calculation for near-synced nodes
-								percent = float64(cur) / float64(remoteH) * 100
-							}
-						}
-						percent = floor2(percent)
-						if cur < remoteH && percent >= 100 {
-							percent = 99.99
-						}
-						// Render progress bar with current stats
-						line := renderProgressWithQuiet(percent, cur, remoteH, opts.Quiet)
-						rate, eta := progressRateAndETA(buf, cur, remoteH)
-						lineWithETA := line
-						if eta != "" {
-							lineWithETA += eta
-						}
-						if tty {
-							extra := ""
-							if lastPeers > 0 {
-								extra += fmt.Sprintf("  peers: %d", lastPeers)
-							}
-							if lastLatency > 0 {
-								extra += fmt.Sprintf("  rtt: %dms", lastLatency)
-							}
-							fmt.Fprintf(opts.Out, "\r\033[K  %s%s", lineWithETA, extra)
-						} else {
-							if opts.Quiet {
-								fmt.Fprintf(opts.Out, "height=%d/%d rate=%.2f%s peers=%d rtt=%dms\n", cur, remoteH, rate, eta, lastPeers, lastLatency)
-							} else {
-								fmt.Fprintf(opts.Out, "%s height=%d/%d rate=%.2f blk/s%s peers=%d rtt=%dms\n", time.Now().Format(time.Kitchen), cur, remoteH, rate, eta, lastPeers, lastLatency)
-							}
-						}
-					}
+			}
+			// While within minShow and already not catching_up, keep the bar live-updating
+			if !st.CatchingUp && barPrinted && time.Since(firstBarTime) < minShow {
+				cur := st.Height
+				if cur == 0 && len(buf) > 0 {
+					cur = buf[len(buf)-1].h
 				}
-				// While within minShow and already not catching_up, keep the bar live-updating
-				if !st.CatchingUp && barPrinted && time.Since(firstBarTime) < minShow {
-					cur := st.Height
-					if cur == 0 && len(buf) > 0 {
-						cur = buf[len(buf)-1].h
+				remoteH := lastRemote
+				if remoteH == 0 {
+					remoteH = probeRemoteOnce(opts.RemoteRPC, cur)
+				}
+				if remoteH < cur {
+					remoteH = cur
+				}
+				percent := 0.0
+				if remoteH > 0 {
+					percent = float64(cur) / float64(remoteH) * 100
+				}
+				percent = floor2(percent)
+				if cur < remoteH && percent >= 100 {
+					percent = 99.99
+				}
+				line := renderProgressWithQuiet(percent, cur, remoteH, opts.Quiet)
+				rate, eta := progressRateAndETA(buf, cur, remoteH)
+				lineWithETA := line
+				if eta != "" {
+					lineWithETA += eta
+				}
+				if tty {
+					extra := ""
+					if lastPeers > 0 {
+						extra += fmt.Sprintf("  peers: %d", lastPeers)
 					}
-					remoteH := lastRemote
-					if remoteH == 0 {
-						remoteH = probeRemoteOnce(opts.RemoteRPC, cur)
+					if lastLatency > 0 {
+						extra += fmt.Sprintf("  rtt: %dms", lastLatency)
 					}
-					if remoteH < cur {
-						remoteH = cur
-					}
-					percent := 0.0
-					if remoteH > 0 {
-						percent = float64(cur) / float64(remoteH) * 100
-					}
-					percent = floor2(percent)
-					if cur < remoteH && percent >= 100 {
-						percent = 99.99
-					}
-					line := renderProgressWithQuiet(percent, cur, remoteH, opts.Quiet)
-					rate, eta := progressRateAndETA(buf, cur, remoteH)
-					lineWithETA := line
-					if eta != "" {
-						lineWithETA += eta
-					}
-					if tty {
-						extra := ""
-						if lastPeers > 0 {
-							extra += fmt.Sprintf("  peers: %d", lastPeers)
-						}
-						if lastLatency > 0 {
-							extra += fmt.Sprintf("  rtt: %dms", lastLatency)
-						}
-						fmt.Fprintf(opts.Out, "\r\033[K  %s%s", lineWithETA, extra)
+					fmt.Fprintf(opts.Out, "\r\033[K  %s%s", lineWithETA, extra)
+				} else {
+					if opts.Quiet {
+						fmt.Fprintf(opts.Out, "height=%d/%d rate=%.2f%s peers=%d rtt=%dms\n", cur, remoteH, rate, eta, lastPeers, lastLatency)
 					} else {
-						if opts.Quiet {
-							fmt.Fprintf(opts.Out, "height=%d/%d rate=%.2f%s peers=%d rtt=%dms\n", cur, remoteH, rate, eta, lastPeers, lastLatency)
-						} else {
-							fmt.Fprintf(opts.Out, "%s height=%d/%d rate=%.2f blk/s%s peers=%d rtt=%dms\n", time.Now().Format(time.Kitchen), cur, remoteH, rate, eta, lastPeers, lastLatency)
-						}
+						fmt.Fprintf(opts.Out, "%s height=%d/%d rate=%.2f blk/s%s peers=%d rtt=%dms\n", time.Now().Format(time.Kitchen), cur, remoteH, rate, eta, lastPeers, lastLatency)
 					}
-					continue
 				}
-				// End condition: catching_up is false AND minShow window has passed
-				if !st.CatchingUp && holdStarted && time.Since(firstBarTime) >= minShow {
-					cur := st.Height
-					remoteH := lastRemote
-					if remoteH == 0 {
-						remoteH = probeRemoteOnce(opts.RemoteRPC, cur)
+				continue
+			}
+			// End condition: catching_up is false AND minShow window has passed
+			if !st.CatchingUp && holdStarted && time.Since(firstBarTime) >= minShow {
+				cur := st.Height
+				remoteH := lastRemote
+				if remoteH == 0 {
+					remoteH = probeRemoteOnce(opts.RemoteRPC, cur)
+				}
+				if remoteH < cur {
+					remoteH = cur
+				}
+				percent := 0.0
+				if remoteH > 0 {
+					percent = float64(cur) / float64(remoteH) * 100
+				}
+				percent = floor2(percent)
+				if cur < remoteH && percent >= 100 {
+					percent = 99.99
+				}
+				line := renderProgressWithQuiet(percent, cur, remoteH, opts.Quiet)
+				rate, eta := progressRateAndETA(buf, cur, remoteH)
+				lineWithETA := line
+				if eta != "" {
+					lineWithETA += eta
+				}
+				if tty {
+					extra := ""
+					if lastPeers > 0 {
+						extra += fmt.Sprintf("  peers: %d", lastPeers)
 					}
-					if remoteH < cur {
-						remoteH = cur
+					if lastLatency > 0 {
+						extra += fmt.Sprintf("  rtt: %dms", lastLatency)
 					}
-					percent := 0.0
-					if remoteH > 0 {
-						percent = float64(cur) / float64(remoteH) * 100
-					}
-					percent = floor2(percent)
-					if cur < remoteH && percent >= 100 {
-						percent = 99.99
-					}
-					line := renderProgressWithQuiet(percent, cur, remoteH, opts.Quiet)
-					rate, eta := progressRateAndETA(buf, cur, remoteH)
-					lineWithETA := line
-					if eta != "" {
-						lineWithETA += eta
-					}
-					if tty {
-						extra := ""
-						if lastPeers > 0 {
-							extra += fmt.Sprintf("  peers: %d", lastPeers)
-						}
-						if lastLatency > 0 {
-							extra += fmt.Sprintf("  rtt: %dms", lastLatency)
-						}
-						fmt.Fprintf(opts.Out, "\r\033[K  %s%s\n", lineWithETA, extra)
+					fmt.Fprintf(opts.Out, "\r\033[K  %s%s\n", lineWithETA, extra)
+				} else {
+					if opts.Quiet {
+						fmt.Fprintf(opts.Out, "height=%d/%d rate=%.2f%s peers=%d rtt=%dms\n", cur, remoteH, rate, eta, lastPeers, lastLatency)
 					} else {
-						if opts.Quiet {
-							fmt.Fprintf(opts.Out, "height=%d/%d rate=%.2f%s peers=%d rtt=%dms\n", cur, remoteH, rate, eta, lastPeers, lastLatency)
-						} else {
-							fmt.Fprintf(opts.Out, "%s height=%d/%d rate=%.2f blk/s%s peers=%d rtt=%dms\n", time.Now().Format(time.Kitchen), cur, remoteH, rate, eta, lastPeers, lastLatency)
-						}
+						fmt.Fprintf(opts.Out, "%s height=%d/%d rate=%.2f blk/s%s peers=%d rtt=%dms\n", time.Now().Format(time.Kitchen), cur, remoteH, rate, eta, lastPeers, lastLatency)
 					}
-					return nil
 				}
+				return nil
 			}
 		}
 	}

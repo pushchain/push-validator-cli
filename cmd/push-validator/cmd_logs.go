@@ -91,7 +91,6 @@ func handleLogsCore(sup process.Supervisor, deps logDeps) error {
 
 	return deps.runLogUI(ctx, ui.LogUIOptions{
 		LogPath:    lp,
-		BgKey:      'b',
 		ShowFooter: interactive,
 		NoColor:    flagNoColor,
 	})

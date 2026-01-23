@@ -39,7 +39,7 @@ func handleBalance(d *Deps, args []string) error {
         convCancel()
         if convErr != nil {
             if flagOutput == "json" { d.Printer.JSON(map[string]any{"ok": false, "error": convErr.Error(), "address": addr}) } else { d.Printer.Error(fmt.Sprintf("address conversion error: %v", convErr)) }
-            return convErr
+            return silentErr{convErr}
         }
         addr = bech32Addr
     }
