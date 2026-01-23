@@ -36,7 +36,7 @@ Examples:
   push-validator update --force      # Skip confirmation
   push-validator update --version v1.2.0  # Install specific version`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			p := ui.NewPrinter(flagOutput)
+			p := getPrinter()
 
 			// Create updater
 			updater, err := update.NewUpdater(Version)

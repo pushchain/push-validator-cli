@@ -28,6 +28,9 @@ const (
 	httpTimeout = 30 * time.Second
 )
 
+// httpClient can be overridden for testing
+var httpClient = &http.Client{Timeout: httpTimeout}
+
 // Release represents a GitHub release
 type Release struct {
 	TagName    string  `json:"tag_name"`
@@ -60,8 +63,6 @@ func NewInstaller(homeDir string) *Installer {
 
 // FetchLatestRelease gets the latest release from GitHub
 func FetchLatestRelease() (*Release, error) {
-	client := &http.Client{Timeout: httpTimeout}
-
 	req, err := http.NewRequest("GET", latestReleaseURL, nil)
 	if err != nil {
 		return nil, err
@@ -69,7 +70,7 @@ func FetchLatestRelease() (*Release, error) {
 	req.Header.Set("Accept", "application/vnd.github.v3+json")
 	req.Header.Set("User-Agent", "push-validator-cli")
 
-	resp, err := client.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch release: %w", err)
 	}
@@ -97,7 +98,6 @@ func FetchReleaseByTag(tag string) (*Release, error) {
 		tag = "v" + tag
 	}
 
-	client := &http.Client{Timeout: httpTimeout}
 	url := fmt.Sprintf(releaseByTagURL, tag)
 
 	req, err := http.NewRequest("GET", url, nil)
@@ -107,7 +107,7 @@ func FetchReleaseByTag(tag string) (*Release, error) {
 	req.Header.Set("Accept", "application/vnd.github.v3+json")
 	req.Header.Set("User-Agent", "push-validator-cli")
 
-	resp, err := client.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch release: %w", err)
 	}

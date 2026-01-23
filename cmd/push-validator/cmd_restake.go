@@ -13,7 +13,6 @@ import (
 	"github.com/pushchain/push-validator-cli/internal/config"
 	"github.com/pushchain/push-validator-cli/internal/dashboard"
 	"github.com/pushchain/push-validator-cli/internal/node"
-	ui "github.com/pushchain/push-validator-cli/internal/ui"
 	"github.com/pushchain/push-validator-cli/internal/validator"
 	"golang.org/x/term"
 )
@@ -27,7 +26,7 @@ import (
 // - submit delegation transaction
 // - display results
 func handleRestakeRewardsAll(cfg config.Config) error {
-	p := ui.NewPrinter(flagOutput)
+	p := getPrinter()
 
 	if flagOutput != "json" {
 		fmt.Println()
@@ -37,7 +36,7 @@ func handleRestakeRewardsAll(cfg config.Config) error {
 
 	// Step 1: Check sync status
 	if flagOutput != "json" {
-		fmt.Print(p.Colors.Apply(p.Colors.Theme.Prompt, "🔍 Checking node sync status..."))
+		fmt.Print(p.Colors.Apply(p.Colors.Theme.Prompt, p.Colors.Emoji("🔍")+" Checking node sync status..."))
 	}
 
 	local := strings.TrimRight(cfg.RPCLocal, "/")
@@ -58,7 +57,7 @@ func handleRestakeRewardsAll(cfg config.Config) error {
 			getPrinter().JSON(map[string]any{"ok": false, "error": "failed to check sync status"})
 		} else {
 			fmt.Println()
-			fmt.Println(p.Colors.Error("❌ Failed to check sync status"))
+			fmt.Println(p.Colors.Error(p.Colors.Emoji("❌") + " Failed to check sync status"))
 			fmt.Println()
 			fmt.Println(p.Colors.Info("Please verify your node is running and properly configured."))
 			fmt.Println()
@@ -71,7 +70,7 @@ func handleRestakeRewardsAll(cfg config.Config) error {
 			getPrinter().JSON(map[string]any{"ok": false, "error": "node is still syncing"})
 		} else {
 			fmt.Println()
-			fmt.Println(p.Colors.Warning("⚠️ Node is still syncing to latest block"))
+			fmt.Println(p.Colors.Warning(p.Colors.Emoji("⚠️") + " Node is still syncing to latest block"))
 			fmt.Println()
 			fmt.Println(p.Colors.Info("Please wait for sync to complete before restaking rewards."))
 			fmt.Println(p.Colors.Apply(p.Colors.Theme.Command, "  push-validator sync"))
@@ -81,12 +80,12 @@ func handleRestakeRewardsAll(cfg config.Config) error {
 	}
 
 	if flagOutput != "json" {
-		fmt.Println(" " + p.Colors.Success("✓"))
+		fmt.Println(" " + p.Colors.Success(p.Colors.Emoji("✓")))
 	}
 
 	// Step 2: Check validator registration
 	if flagOutput != "json" {
-		fmt.Print(p.Colors.Apply(p.Colors.Theme.Prompt, "🔍 Checking validator status..."))
+		fmt.Print(p.Colors.Apply(p.Colors.Theme.Prompt, p.Colors.Emoji("🔍")+" Checking validator status..."))
 	}
 
 	ctx2, cancel2 := context.WithTimeout(context.Background(), 10*time.Second)
@@ -98,7 +97,7 @@ func handleRestakeRewardsAll(cfg config.Config) error {
 			getPrinter().JSON(map[string]any{"ok": false, "error": "failed to check validator status"})
 		} else {
 			fmt.Println()
-			fmt.Println(p.Colors.Error("❌ Failed to check validator status"))
+			fmt.Println(p.Colors.Error(p.Colors.Emoji("❌") + " Failed to check validator status"))
 			fmt.Println()
 		}
 		return fmt.Errorf("failed to check validator status: %w", statusErr)
@@ -109,7 +108,7 @@ func handleRestakeRewardsAll(cfg config.Config) error {
 			getPrinter().JSON(map[string]any{"ok": false, "error": "node is not registered as validator"})
 		} else {
 			fmt.Println()
-			fmt.Println(p.Colors.Warning("⚠️ This node is not registered as a validator"))
+			fmt.Println(p.Colors.Warning(p.Colors.Emoji("⚠️") + " This node is not registered as a validator"))
 			fmt.Println()
 			fmt.Println(p.Colors.Info("Register first using:"))
 			fmt.Println(p.Colors.Apply(p.Colors.Theme.Command, "  push-validator register-validator"))
@@ -119,12 +118,12 @@ func handleRestakeRewardsAll(cfg config.Config) error {
 	}
 
 	if flagOutput != "json" {
-		fmt.Println(" " + p.Colors.Success("✓"))
+		fmt.Println(" " + p.Colors.Success(p.Colors.Emoji("✓")))
 	}
 
 	// Step 3: Fetch current rewards
 	if flagOutput != "json" {
-		fmt.Print(p.Colors.Apply(p.Colors.Theme.Prompt, "💰 Fetching current rewards..."))
+		fmt.Print(p.Colors.Apply(p.Colors.Theme.Prompt, p.Colors.Emoji("💰")+" Fetching current rewards..."))
 	}
 
 	ctx3, cancel3 := context.WithTimeout(context.Background(), 5*time.Second)
@@ -132,7 +131,7 @@ func handleRestakeRewardsAll(cfg config.Config) error {
 	cancel3()
 
 	if flagOutput != "json" {
-		fmt.Println(" " + p.Colors.Success("✓"))
+		fmt.Println(" " + p.Colors.Success(p.Colors.Emoji("✓")))
 	}
 
 	if rewardsErr != nil {
@@ -140,7 +139,7 @@ func handleRestakeRewardsAll(cfg config.Config) error {
 			getPrinter().JSON(map[string]any{"ok": false, "error": "failed to fetch rewards"})
 		} else {
 			fmt.Println()
-			fmt.Println(p.Colors.Error("❌ Failed to fetch rewards"))
+			fmt.Println(p.Colors.Error(p.Colors.Emoji("❌") + " Failed to fetch rewards"))
 			fmt.Println()
 			fmt.Printf("Error: %v\n", rewardsErr)
 			fmt.Println()
@@ -167,7 +166,7 @@ func handleRestakeRewardsAll(cfg config.Config) error {
 		if flagOutput == "json" {
 			getPrinter().JSON(map[string]any{"ok": false, "error": "no significant rewards available"})
 		} else {
-			fmt.Println(p.Colors.Warning("⚠️ No significant rewards available (less than 0.01 PC)"))
+			fmt.Println(p.Colors.Warning(p.Colors.Emoji("⚠️") + " No significant rewards available (less than 0.01 PC)"))
 			fmt.Println()
 			fmt.Println(p.Colors.Info("Nothing to restake. Continue earning rewards and try again later."))
 			fmt.Println()
@@ -190,7 +189,7 @@ func handleRestakeRewardsAll(cfg config.Config) error {
 			if findErr == nil {
 				keyName = foundKey
 				if flagOutput != "json" {
-					fmt.Printf("🔑 Using key: %s\n", keyName)
+					fmt.Printf("%s Using key: %s\n", p.Colors.Emoji("🔑"), keyName)
 					fmt.Println()
 				}
 			} else {
@@ -226,7 +225,7 @@ func handleRestakeRewardsAll(cfg config.Config) error {
 			getPrinter().JSON(map[string]any{"ok": false, "error": withdrawErr.Error(), "step": "withdraw"})
 		} else {
 			fmt.Println()
-			fmt.Println(p.Colors.Error("❌ Withdrawal transaction failed"))
+			fmt.Println(p.Colors.Error(p.Colors.Emoji("❌") + " Withdrawal transaction failed"))
 			fmt.Println()
 			fmt.Printf("Error: %v\n", withdrawErr)
 			fmt.Println()
@@ -235,10 +234,10 @@ func handleRestakeRewardsAll(cfg config.Config) error {
 	}
 
 	if flagOutput != "json" {
-		fmt.Println(" " + p.Colors.Success("✓"))
+		fmt.Println(" " + p.Colors.Success(p.Colors.Emoji("✓")))
 		fmt.Println()
 		p.KeyValueLine("Transaction Hash", txHash, "green")
-		fmt.Printf(p.Colors.Success("✓ Successfully withdrew %.6f PC\n"), totalRewards)
+		fmt.Printf(p.Colors.Success(p.Colors.Emoji("✓") + " Successfully withdrew %.6f PC\n"), totalRewards)
 		fmt.Println()
 	}
 
@@ -256,7 +255,7 @@ func handleRestakeRewardsAll(cfg config.Config) error {
 				"message":         "insufficient balance for restaking after gas reserve",
 			})
 		} else {
-			fmt.Println(p.Colors.Warning("⚠️ Insufficient balance for restaking after gas reserve"))
+			fmt.Println(p.Colors.Warning(p.Colors.Emoji("⚠️") + " Insufficient balance for restaking after gas reserve"))
 			fmt.Println()
 			fmt.Println("Funds have been withdrawn to your wallet but are too small to restake.")
 			fmt.Println()
@@ -327,30 +326,30 @@ func handleRestakeRewardsAll(cfg config.Config) error {
 					amountInput = strings.TrimSpace(amountInput)
 
 					if amountInput == "" {
-						fmt.Println(p.Colors.Error("⚠ Amount is required. Try again."))
+						fmt.Println(p.Colors.Error(p.Colors.Emoji("⚠") + " Amount is required. Try again."))
 						continue
 					}
 
 					// Parse user input
 					customAmount, parseErr := strconv.ParseFloat(amountInput, 64)
 					if parseErr != nil {
-						fmt.Println(p.Colors.Error("⚠ Invalid amount. Enter a number. Try again."))
+						fmt.Println(p.Colors.Error(p.Colors.Emoji("⚠") + " Invalid amount. Enter a number. Try again."))
 						continue
 					}
 
 					// Validate bounds
 					if customAmount < 0.01 {
-						fmt.Println(p.Colors.Error("⚠ Amount too low. Minimum restake is 0.01 PC. Try again."))
+						fmt.Println(p.Colors.Error(p.Colors.Emoji("⚠") + " Amount too low. Minimum restake is 0.01 PC. Try again."))
 						continue
 					}
 					if customAmount > maxRestakeable {
-						fmt.Printf(p.Colors.Error("⚠ Insufficient balance. Maximum: %.6f PC. Try again.\n"), maxRestakeable)
+						fmt.Printf(p.Colors.Error(p.Colors.Emoji("⚠") + " Insufficient balance. Maximum: %.6f PC. Try again.\n"), maxRestakeable)
 						continue
 					}
 
 					// Use custom amount
 					restakeAmount = customAmount
-					fmt.Printf(p.Colors.Success("✓ Will restake %.6f PC\n"), restakeAmount)
+					fmt.Printf(p.Colors.Success(p.Colors.Emoji("✓") + " Will restake %.6f PC\n"), restakeAmount)
 					fmt.Println()
 					break
 				}
@@ -371,7 +370,7 @@ func handleRestakeRewardsAll(cfg config.Config) error {
 
 	// Step 9: Submit delegation transaction
 	if flagOutput != "json" {
-		fmt.Print(p.Colors.Apply(p.Colors.Theme.Prompt, "📤 Restaking funds..."))
+		fmt.Print(p.Colors.Apply(p.Colors.Theme.Prompt, p.Colors.Emoji("📤")+" Restaking funds..."))
 	}
 
 	ctx6, cancel6 := context.WithTimeout(context.Background(), 90*time.Second)
@@ -393,7 +392,7 @@ func handleRestakeRewardsAll(cfg config.Config) error {
 			})
 		} else {
 			fmt.Println()
-			fmt.Println(p.Colors.Error("❌ Restaking transaction failed"))
+			fmt.Println(p.Colors.Error(p.Colors.Emoji("❌") + " Restaking transaction failed"))
 			fmt.Println()
 			fmt.Printf("Error: %v\n", delegateErr)
 			fmt.Println()
@@ -405,7 +404,7 @@ func handleRestakeRewardsAll(cfg config.Config) error {
 	}
 
 	if flagOutput != "json" {
-		fmt.Println(" " + p.Colors.Success("✓"))
+		fmt.Println(" " + p.Colors.Success(p.Colors.Emoji("✓")))
 	}
 
 	// Success output
@@ -419,7 +418,7 @@ func handleRestakeRewardsAll(cfg config.Config) error {
 		})
 	} else {
 		fmt.Println()
-		p.Success("✅ Successfully restaked rewards!")
+		p.Success(p.Colors.Emoji("✅") + " Successfully restaked rewards!")
 		fmt.Println()
 
 		// Display transaction details

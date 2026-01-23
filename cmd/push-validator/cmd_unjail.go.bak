@@ -5,26 +5,23 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/pushchain/push-validator-cli/internal/config"
-	"github.com/pushchain/push-validator-cli/internal/dashboard"
 	"github.com/pushchain/push-validator-cli/internal/node"
+	ui "github.com/pushchain/push-validator-cli/internal/ui"
 	"github.com/pushchain/push-validator-cli/internal/validator"
 	"golang.org/x/term"
 )
 
-// handleWithdrawRewards orchestrates the withdraw rewards flow:
+// handleUnjail orchestrates the validator unjail flow:
 // - verify node is synced
-// - verify validator is registered
-// - display current rewards
+// - verify validator is jailed with expired jail period
 // - prompt for key name
-// - ask about including commission
-// - submit withdraw transaction
+// - submit unjail transaction
 // - display results
-func handleWithdrawRewards(cfg config.Config) error {
+func handleUnjail(cfg config.Config) error {
 	p := getPrinter()
 
 	// Step 1: Check sync status
@@ -66,7 +63,7 @@ func handleWithdrawRewards(cfg config.Config) error {
 			fmt.Println()
 			fmt.Println(p.Colors.Warning(p.Colors.Emoji("⚠️") + " Node is still syncing to latest block"))
 			fmt.Println()
-			fmt.Println(p.Colors.Info("Please wait for sync to complete before withdrawing rewards."))
+			fmt.Println(p.Colors.Info("Please wait for sync to complete before unjailing."))
 			fmt.Println(p.Colors.Apply(p.Colors.Theme.Command, "  push-validator sync"))
 			fmt.Println()
 		}
@@ -77,9 +74,9 @@ func handleWithdrawRewards(cfg config.Config) error {
 		fmt.Println(" " + p.Colors.Success(p.Colors.Emoji("✓")))
 	}
 
-	// Step 2: Check validator registration
+	// Step 2: Check validator jail status
 	if flagOutput != "json" {
-		fmt.Print(p.Colors.Apply(p.Colors.Theme.Prompt, p.Colors.Emoji("🔍")+" Checking validator status..."))
+		fmt.Print(p.Colors.Apply(p.Colors.Theme.Prompt, p.Colors.Emoji("🔍")+" Checking validator jail status..."))
 	}
 
 	ctx2, cancel2 := context.WithTimeout(context.Background(), 10*time.Second)
@@ -94,7 +91,7 @@ func handleWithdrawRewards(cfg config.Config) error {
 			fmt.Println(p.Colors.Error(p.Colors.Emoji("❌") + " Failed to check validator status"))
 			fmt.Println()
 		}
-		return fmt.Errorf("failed to check validator status")
+		return fmt.Errorf("failed to check validator status: %w", statusErr)
 	}
 
 	if !myVal.IsValidator {
@@ -111,88 +108,61 @@ func handleWithdrawRewards(cfg config.Config) error {
 		return fmt.Errorf("node is not registered as validator")
 	}
 
-	if flagOutput != "json" {
-		fmt.Println(" " + p.Colors.Success(p.Colors.Emoji("✓")))
-	}
-
-	// Step 3: Display current rewards
-	if flagOutput != "json" {
-		fmt.Print(p.Colors.Apply(p.Colors.Theme.Prompt, p.Colors.Emoji("💰")+" Fetching current rewards..."))
-	}
-
-	ctx3, cancel3 := context.WithTimeout(context.Background(), 5*time.Second)
-	commission, outstanding, rewardsErr := validator.GetValidatorRewards(ctx3, cfg, myVal.Address)
-	cancel3()
-
-	if flagOutput != "json" {
-		fmt.Println(" " + p.Colors.Success(p.Colors.Emoji("✓")))
-	}
-
-	if flagOutput == "json" {
-		getPrinter().JSON(map[string]any{
-			"ok":                  true,
-			"commission_rewards":  commission,
-			"outstanding_rewards": outstanding,
-		})
-		return nil
-	}
-
-	// Display rewards summary and validate
-	fmt.Println()
-	p.Header("Current Rewards")
-	if rewardsErr == nil {
-		p.KeyValueLine("Commission Rewards", dashboard.FormatSmartNumber(commission)+" PC", "green")
-		p.KeyValueLine("Outstanding Rewards", dashboard.FormatSmartNumber(outstanding)+" PC", "green")
-	} else {
-		fmt.Println(p.Colors.Warning(p.Colors.Emoji("⚠️") + " Could not fetch rewards, but proceeding with withdrawal"))
-	}
-	fmt.Println()
-
-	// Parse rewards to check if any are available
-	commissionFloat, _ := strconv.ParseFloat(strings.TrimSpace(strings.TrimSuffix(commission, "PC")), 64)
-	outstandingFloat, _ := strconv.ParseFloat(strings.TrimSpace(strings.TrimSuffix(outstanding, "PC")), 64)
-	const rewardThreshold = 0.01 // Minimum 0.01 PC to be worthwhile
-	hasSignificantRewards := commissionFloat >= rewardThreshold || outstandingFloat >= rewardThreshold
-
-	// Warn if rewards are minimal
-	if !hasSignificantRewards && rewardsErr == nil {
-		fmt.Println(p.Colors.Warning(p.Colors.Emoji("⚠️") + " No significant rewards available (less than 0.01 PC)"))
-		if !flagNonInteractive {
-			savedStdin := os.Stdin
-			var tty *os.File
-			if !term.IsTerminal(int(savedStdin.Fd())) {
-				if t, err := os.OpenFile("/dev/tty", os.O_RDONLY, 0); err == nil {
-					tty = t
-					os.Stdin = t
-				}
-			}
-			if tty != nil {
-				defer func() {
-					os.Stdin = savedStdin
-					tty.Close()
-				}()
-			}
-
-			reader := bufio.NewReader(os.Stdin)
-			fmt.Print("Continue with withdrawal anyway? (y/N): ")
-			input, _ := reader.ReadString('\n')
-			input = strings.TrimSpace(strings.ToLower(input))
-			if input != "y" && input != "yes" {
-				fmt.Println()
-				fmt.Println(p.Colors.Info("Withdrawal cancelled."))
-				fmt.Println()
-					return nil
-			}
-			fmt.Println()
+	if !myVal.Jailed {
+		if flagOutput == "json" {
+			getPrinter().JSON(map[string]any{"ok": false, "error": "validator is not jailed"})
 		} else {
-			// Non-interactive: abort if no rewards
-			fmt.Println(p.Colors.Error(p.Colors.Emoji("❌") + " No significant rewards to withdraw. Aborting."))
 			fmt.Println()
-			return fmt.Errorf("no significant rewards to withdraw")
+			fmt.Println(p.Colors.Success(p.Colors.Emoji("✓") + " Validator is active (not jailed)"))
+			fmt.Println()
+			fmt.Println(p.Colors.Info("Status: " + myVal.Status))
+			fmt.Println()
 		}
+		return fmt.Errorf("validator is not jailed")
 	}
 
-	// Step 4: Auto-detect key name from validator
+	if flagOutput != "json" {
+		fmt.Println(" " + p.Colors.Success(p.Colors.Emoji("✓")))
+	}
+
+	// Step 3: Check if jail period has expired
+	if flagOutput != "json" {
+		fmt.Print(p.Colors.Apply(p.Colors.Theme.Prompt, p.Colors.Emoji("🔍")+" Checking jail expiry..."))
+	}
+
+	jailedUntil := myVal.SlashingInfo.JailedUntil
+	if jailedUntil == "" {
+		if flagOutput == "json" {
+			getPrinter().JSON(map[string]any{"ok": false, "error": "could not determine jail period"})
+		} else {
+			fmt.Println()
+			fmt.Println(p.Colors.Error(p.Colors.Emoji("❌") + " Could not determine jail period"))
+			fmt.Println()
+		}
+		return fmt.Errorf("could not determine jail period")
+	}
+
+	// Check if jail time has passed
+	if !isJailPeriodExpired(jailedUntil) {
+		if flagOutput == "json" {
+			getPrinter().JSON(map[string]any{"ok": false, "error": "jail period has not expired", "jailed_until": jailedUntil})
+		} else {
+			fmt.Println()
+			fmt.Println(p.Colors.Warning(p.Colors.Emoji("⚠️") + " Jail period has not expired yet"))
+			fmt.Println()
+			fmt.Printf("Jailed until: %s\n", jailedUntil)
+			fmt.Println()
+			fmt.Println(p.Colors.Info("Please wait until the jail period expires before attempting to unjail."))
+			fmt.Println()
+		}
+		return fmt.Errorf("jail period has not expired (until %s)", jailedUntil)
+	}
+
+	if flagOutput != "json" {
+		fmt.Println(" " + p.Colors.Success(p.Colors.Emoji("✓")))
+	}
+
+	// Step 4: Auto-derive key name from validator
 	defaultKeyName := getenvDefault("KEY_NAME", "validator-key")
 	var keyName string
 
@@ -244,7 +214,7 @@ func handleWithdrawRewards(cfg config.Config) error {
 		}
 
 		reader := bufio.NewReader(os.Stdin)
-		fmt.Printf("\nEnter key name for withdrawal [%s]: ", defaultKeyName)
+		fmt.Printf("\nEnter key name for unjailing [%s]: ", defaultKeyName)
 		input, _ := reader.ReadString('\n')
 		input = strings.TrimSpace(input)
 		if input != "" {
@@ -272,7 +242,7 @@ func handleWithdrawRewards(cfg config.Config) error {
 			fmt.Println(p.Colors.Error(p.Colors.Emoji("❌") + " Failed to derive account address"))
 			fmt.Println()
 		}
-		return fmt.Errorf("failed to derive account address")
+		return
 	}
 
 	// Get EVM address for display
@@ -284,46 +254,20 @@ func handleWithdrawRewards(cfg config.Config) error {
 	}
 
 	if flagOutput != "json" {
-		fmt.Println(" " + p.Colors.Success(p.Colors.Emoji("✓")))
+		fmt.Println(" " + p.Colors.Success("✓"))
 	}
 
 	// Wait for sufficient balance (only in interactive mode)
 	if flagOutput != "json" && !flagNonInteractive {
 		const requiredForGasFees = "150000000000000000" // 0.15 PC in micro-units, enough for gas (actual: ~0.1037 PC + 1.45x buffer)
-		if !waitForSufficientBalance(cfg, accountAddr, evmAddr, requiredForGasFees, "withdraw") {
-			return fmt.Errorf("insufficient balance for gas fees")
+		if !waitForSufficientBalance(cfg, accountAddr, evmAddr, requiredForGasFees, "unjail") {
+			return
 		}
 	}
 
-	// Step 7: Ask about commission
-	var includeCommission bool
-	if !flagNonInteractive {
-		savedStdin := os.Stdin
-		var tty *os.File
-		if !term.IsTerminal(int(savedStdin.Fd())) {
-			if t, err := os.OpenFile("/dev/tty", os.O_RDONLY, 0); err == nil {
-				tty = t
-				os.Stdin = t
-			}
-		}
-		if tty != nil {
-			defer func() {
-				os.Stdin = savedStdin
-				tty.Close()
-			}()
-		}
-
-		reader := bufio.NewReader(os.Stdin)
-		fmt.Print("Include commission rewards in withdrawal? (y/n) [n]: ")
-		input, _ := reader.ReadString('\n')
-		input = strings.TrimSpace(strings.ToLower(input))
-		includeCommission = input == "y" || input == "yes"
-		fmt.Println()
-	}
-
-	// Step 8: Submit withdraw rewards transaction
+	// Step 6: Submit unjail transaction
 	if flagOutput != "json" {
-		fmt.Print(p.Colors.Apply(p.Colors.Theme.Prompt, p.Colors.Emoji("📤")+" Submitting withdrawal transaction..."))
+		fmt.Print(p.Colors.Apply(p.Colors.Theme.Prompt, "📤 Submitting unjail transaction..."))
 	}
 
 	v := validator.NewWith(validator.Options{
@@ -335,21 +279,21 @@ func handleWithdrawRewards(cfg config.Config) error {
 		Denom:         cfg.Denom,
 	})
 
-	ctx5, cancel5 := context.WithTimeout(context.Background(), 90*time.Second)
-	defer cancel5()
+	ctx3, cancel3 := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel3()
 
-	txHash, err := v.WithdrawRewards(ctx5, myVal.Address, keyName, includeCommission)
+	txHash, err := v.Unjail(ctx3, keyName)
 	if err != nil {
 		if flagOutput == "json" {
 			getPrinter().JSON(map[string]any{"ok": false, "error": err.Error()})
 		} else {
 			fmt.Println()
-			fmt.Println(p.Colors.Error(p.Colors.Emoji("❌") + " Withdrawal transaction failed"))
+			fmt.Println(p.Colors.Error(p.Colors.Emoji("❌") + " Unjail transaction failed"))
 			fmt.Println()
 			fmt.Printf("Error: %v\n", err)
 			fmt.Println()
 		}
-		return fmt.Errorf("withdrawal transaction failed: %w", err)
+		return
 	}
 
 	if flagOutput != "json" {
@@ -361,7 +305,7 @@ func handleWithdrawRewards(cfg config.Config) error {
 		getPrinter().JSON(map[string]any{"ok": true, "txhash": txHash})
 	} else {
 		fmt.Println()
-		p.Success(p.Colors.Emoji("✅") + " Rewards successfully withdrawn!")
+		p.Success(p.Colors.Emoji("✅") + " Validator successfully unjailed!")
 		fmt.Println()
 
 		// Display transaction hash
@@ -375,14 +319,27 @@ func handleWithdrawRewards(cfg config.Config) error {
 		fmt.Println(p.Colors.Info("  1. Check validator status:"))
 		fmt.Println(p.Colors.Apply(p.Colors.Theme.Command, "     push-validator validators"))
 		fmt.Println()
-		fmt.Println(p.Colors.Info("  2. View account balance:"))
-		fmt.Println(p.Colors.Apply(p.Colors.Theme.Command, "     push-validator balance"))
+		fmt.Println(p.Colors.Info("  2. Monitor node status:"))
+		fmt.Println(p.Colors.Apply(p.Colors.Theme.Command, "     push-validator status"))
 		fmt.Println()
 		fmt.Println(p.Colors.Info("  3. Live dashboard:"))
 		fmt.Println(p.Colors.Apply(p.Colors.Theme.Command, "     push-validator dashboard"))
 		fmt.Println()
-		fmt.Println(p.Colors.Apply(p.Colors.Theme.Description, "  Your rewards have been transferred to your account."))
+		fmt.Println(p.Colors.Apply(p.Colors.Theme.Description, "  Your validator will resume block signing and earning rewards."))
 		fmt.Println()
 	}
-	return nil
+}
+
+// isJailPeriodExpired checks if the jail period has passed
+func isJailPeriodExpired(jailedUntil string) bool {
+	if jailedUntil == "" || jailedUntil == "1970-01-01T00:00:00Z" {
+		return true // No jail time means expired
+	}
+
+	t, err := time.Parse(time.RFC3339Nano, jailedUntil)
+	if err != nil {
+		return false // If we can't parse, assume not expired
+	}
+
+	return time.Now().After(t)
 }

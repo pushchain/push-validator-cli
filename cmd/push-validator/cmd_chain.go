@@ -39,7 +39,7 @@ Examples:
   push-validator chain install --force      # Force reinstall`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg := loadCfg()
-			p := ui.NewPrinter(flagOutput)
+			p := getPrinter()
 
 			installer := chain.NewInstaller(cfg.HomeDir)
 
@@ -107,9 +107,9 @@ Examples:
 					return fmt.Errorf("checksum verification failed: %w", err)
 				}
 				if verified {
-					fmt.Printf("  %s Checksum verified\n", p.Colors.Success("✓"))
+					fmt.Printf("  %s Checksum verified\n", p.Colors.Success(p.Colors.Emoji("✓")))
 				} else {
-					fmt.Printf("  %s Checksum file not available, skipping verification\n", p.Colors.Warning("⚠"))
+					fmt.Printf("  %s Checksum file not available, skipping verification\n", p.Colors.Warning(p.Colors.Emoji("⚠")))
 				}
 			}
 
@@ -130,9 +130,9 @@ Examples:
 			}
 
 			if installedVer != "" {
-				fmt.Printf("  %s Installed pchaind (%s)\n", p.Colors.Success("✓"), installedVer)
+				fmt.Printf("  %s Installed pchaind (%s)\n", p.Colors.Success(p.Colors.Emoji("✓")), installedVer)
 			} else {
-				fmt.Printf("  %s Installed pchaind %s\n", p.Colors.Success("✓"), release.TagName)
+				fmt.Printf("  %s Installed pchaind %s\n", p.Colors.Success(p.Colors.Emoji("✓")), release.TagName)
 			}
 
 			return nil

@@ -1,3 +1,8 @@
 scripts/build/pchaind
 /push-validator
 /push-validator.backup
+
+# Coverage artifacts
+.coverage/
+coverage.out
+coverage.html

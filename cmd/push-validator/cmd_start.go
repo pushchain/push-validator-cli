@@ -111,13 +111,11 @@ var startCmd = &cobra.Command{
 			detection := cosmovisor.Detect(cfg.HomeDir)
 			if detection.Available {
 				useCosmovisor = true
-				sup = process.NewCosmovisor(cfg.HomeDir)
 				if flagOutput != "json" && !detection.SetupComplete {
 					p.Info("Initializing Cosmovisor...")
 				}
-			} else {
-				sup = process.New(cfg.HomeDir)
 			}
+			sup = newSupervisor(cfg.HomeDir)
 		} else {
 			sup = process.New(cfg.HomeDir)
 		}
@@ -226,12 +224,7 @@ func handlePostStartFlow(cfg config.Config, p *ui.Printer) bool {
 
 		// Wait for sync to complete using sync monitor
 		// Use correct supervisor based on whether Cosmovisor is available (determines log path)
-		var sup process.Supervisor
-		if detection := cosmovisor.Detect(cfg.HomeDir); detection.Available {
-			sup = process.NewCosmovisor(cfg.HomeDir)
-		} else {
-			sup = process.New(cfg.HomeDir)
-		}
+		sup := newSupervisor(cfg.HomeDir)
 		remoteURL := cfg.RemoteRPCURL()
 
 		// Create reset function for retry logic
@@ -291,7 +284,7 @@ func handlePostStartFlow(cfg config.Config, p *ui.Printer) bool {
 		}); err != nil {
 			// Sync failed after retries - show warning and dashboard
 			fmt.Println()
-			fmt.Println(p.Colors.Warning("  ⚠ Sync failed after retries"))
+			fmt.Println(p.Colors.Warning("  " + p.Colors.Emoji("⚠") + " Sync failed after retries"))
 			fmt.Println(p.Colors.Apply(p.Colors.Theme.Description, "    Try: push-validator reset && push-validator start"))
 			showDashboardPrompt(cfg, p)
 			return false
@@ -301,7 +294,7 @@ func handlePostStartFlow(cfg config.Config, p *ui.Printer) bool {
 		fmt.Println()
 	} else {
 		// Node is already synced - show success message
-		fmt.Println(p.Colors.Success("  ✓ Node is synced"))
+		fmt.Println(p.Colors.Success("  " + p.Colors.Emoji("✓") + " Node is synced"))
 	}
 
 	// Node is synced (or sync check failed) - proceed with validator checks
@@ -346,20 +339,20 @@ func handlePostStartFlow(cfg config.Config, p *ui.Printer) bool {
 		if flagVerbose {
 			fmt.Printf("  [DEBUG] IsValidator error: %v\n", err)
 		}
-		fmt.Println(p.Colors.Warning("  ⚠ Could not verify validator status (will retry in dashboard)"))
+		fmt.Println(p.Colors.Warning("  " + p.Colors.Emoji("⚠") + " Could not verify validator status (will retry in dashboard)"))
 		showDashboardPrompt(cfg, p)
 		return false
 	}
 
 	if isValidator {
 		// Already a validator - show success and dashboard
-		fmt.Println(p.Colors.Success("  ✓ Registered as validator"))
+		fmt.Println(p.Colors.Success("  " + p.Colors.Emoji("✓") + " Registered as validator"))
 		showDashboardPrompt(cfg, p)
 		return true
 	}
 
 	// Not a validator - show registration prompt
-	fmt.Println(p.Colors.Warning("  ⚠ Not registered as validator"))
+	fmt.Println(p.Colors.Warning("  " + p.Colors.Emoji("⚠") + " Not registered as validator"))
 	fmt.Println()
 
 	// Check if we're in an interactive terminal
@@ -406,7 +399,11 @@ func handlePostStartFlow(cfg config.Config, p *ui.Printer) bool {
 	if response == "y" || response == "yes" {
 		// User wants to register
 		fmt.Println()
-		handleRegisterValidator(cfg)
+		if err := handleRegisterValidator(cfg); err != nil {
+			// Error already printed in handleRegisterValidator
+			// Just return false to indicate flow didn't complete successfully
+			return false
+		}
 		fmt.Println()
 	} else {
 		// User declined - show them the steps to do it manually
@@ -474,7 +471,7 @@ func showDashboardPrompt(cfg config.Config, p *ui.Printer) {
 		// After dashboard exit, show status
 		fmt.Println()
 		fmt.Println("═══════════════════════════════════════════════════════════════")
-		fmt.Println(p.Colors.Success("✓ Dashboard closed. Node is still running in background."))
+		fmt.Println(p.Colors.Success(p.Colors.Emoji("✓") + " Dashboard closed. Node is still running in background."))
 		fmt.Println("═══════════════════════════════════════════════════════════════")
 		fmt.Println()
 		return
@@ -497,7 +494,7 @@ func showDashboardPrompt(cfg config.Config, p *ui.Printer) {
 		// After dashboard exit, show status
 		fmt.Println()
 		fmt.Println("═══════════════════════════════════════════════════════════════")
-		fmt.Println(p.Colors.Success("✓ Dashboard closed. Node is still running in background."))
+		fmt.Println(p.Colors.Success(p.Colors.Emoji("✓") + " Dashboard closed. Node is still running in background."))
 		fmt.Println("═══════════════════════════════════════════════════════════════")
 		fmt.Println()
 	case <-time.After(2 * time.Second):

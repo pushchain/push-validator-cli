@@ -13,7 +13,6 @@ import (
 
 	"github.com/pushchain/push-validator-cli/internal/config"
 	"github.com/pushchain/push-validator-cli/internal/node"
-	ui "github.com/pushchain/push-validator-cli/internal/ui"
 	"github.com/pushchain/push-validator-cli/internal/validator"
 	"golang.org/x/term"
 )
@@ -40,7 +39,7 @@ var flagRegisterCheckOnly bool
 // handleRegisterValidator is a compatibility wrapper that pulls
 // defaults from env and invokes runRegisterValidator.
 // It prompts interactively for moniker and key name if not set via env vars.
-func handleRegisterValidator(cfg config.Config) {
+func handleRegisterValidator(cfg config.Config) error {
 	// Get defaults from env or use hardcoded fallbacks
 	defaultMoniker := getenvDefault("MONIKER", "push-validator")
 	defaultKeyName := getenvDefault("KEY_NAME", "validator-key")
@@ -66,35 +65,35 @@ func handleRegisterValidator(cfg config.Config) {
 		if flagOutput == "json" {
 			getPrinter().JSON(map[string]any{"ok": false, "error": statusErr.Error()})
 		} else {
-			p := ui.NewPrinter(flagOutput)
+			p := getPrinter()
 			fmt.Println()
-			fmt.Println(p.Colors.Error("⚠️ Failed to verify validator status"))
+			fmt.Println(p.Colors.Error(p.Colors.Emoji("⚠️") + " Failed to verify validator status"))
 			fmt.Printf("Error: %v\n\n", statusErr)
 			fmt.Println("Please check your network connection and genesis domain configuration.")
 		}
-		return
+		return fmt.Errorf("failed to verify validator status: %w", statusErr)
 	}
 	if flagRegisterCheckOnly {
 		if flagOutput == "json" {
 			getPrinter().JSON(map[string]any{"ok": true, "registered": isValAlready})
 		} else {
-			p := ui.NewPrinter(flagOutput)
+			p := getPrinter()
 			fmt.Println()
 			if isValAlready {
-				fmt.Println(p.Colors.Success("✓ This node is already registered as a validator"))
+				fmt.Println(p.Colors.Success(p.Colors.Emoji("✓") + " This node is already registered as a validator"))
 			} else {
 				fmt.Println(p.Colors.Info("Validator registration required"))
 			}
 		}
-		return
+		return nil
 	}
 	if isValAlready {
 		if flagOutput == "json" {
 			getPrinter().JSON(map[string]any{"ok": false, "error": "validator already registered"})
 		} else {
-			p := ui.NewPrinter(flagOutput)
+			p := getPrinter()
 			fmt.Println()
-			fmt.Println(p.Colors.Success("✓ This node is already registered as a validator"))
+			fmt.Println(p.Colors.Success(p.Colors.Emoji("✓") + " This node is already registered as a validator"))
 			fmt.Println()
 			fmt.Println("Your validator is active on the network.")
 			fmt.Println()
@@ -107,7 +106,7 @@ func handleRegisterValidator(cfg config.Config) {
 			fmt.Println(p.Colors.Apply(p.Colors.Theme.Command, "     push-validator status"))
 			fmt.Println()
 		}
-		return
+		return fmt.Errorf("validator already registered")
 	}
 
 	// Check for moniker conflicts before prompting for registration
@@ -122,10 +121,11 @@ func handleRegisterValidator(cfg config.Config) {
 				"conflicting_moniker": myValInfo.ConflictingMoniker,
 				"message":           fmt.Sprintf("A different validator is already using moniker '%s'. Choose a different moniker to register.", myValInfo.ConflictingMoniker),
 			})
+			return fmt.Errorf("moniker conflict: %s", myValInfo.ConflictingMoniker)
 		} else {
-			p := ui.NewPrinter(flagOutput)
+			p := getPrinter()
 			fmt.Println()
-			fmt.Println(p.Colors.Warning("⚠️ Moniker Conflict Detected"))
+			fmt.Println(p.Colors.Warning(p.Colors.Emoji("⚠️") + " Moniker Conflict Detected"))
 			fmt.Println()
 			fmt.Printf("A different validator is already using the moniker '%s'.\n", p.Colors.Apply(p.Colors.Theme.Value, myValInfo.ConflictingMoniker))
 			fmt.Println()
@@ -133,7 +133,7 @@ func handleRegisterValidator(cfg config.Config) {
 			fmt.Println(p.Colors.Apply(p.Colors.Theme.Description, "Each validator must have a unique identifier on the network."))
 			fmt.Println()
 		}
-		// Don't return - allow registration with a different moniker
+		// Don't return - allow registration with a different moniker in interactive mode
 	}
 
 	// Interactive prompts (skip in JSON mode or if env vars are explicitly set)
@@ -175,9 +175,9 @@ func handleRegisterValidator(cfg config.Config) {
 
 			// Check if key already exists
 			if keyExists(cfg, keyName) {
-				p := ui.NewPrinter(flagOutput)
+				p := getPrinter()
 				fmt.Println()
-				fmt.Println(p.Colors.Warning(fmt.Sprintf("⚠ Key '%s' already exists.", keyName)))
+				fmt.Println(p.Colors.Warning(p.Colors.Emoji("⚠") + fmt.Sprintf(" Key '%s' already exists.", keyName)))
 				fmt.Println()
 				fmt.Println(p.Colors.Info("You can use this existing key or create a new one."))
 				fmt.Println(p.Colors.Apply(p.Colors.Theme.Description, "Note: Recovery mnemonics are only shown when creating new keys."))
@@ -193,7 +193,7 @@ func handleRegisterValidator(cfg config.Config) {
 				} else {
 					// User chose to reuse existing key
 					fmt.Println()
-					fmt.Println(p.Colors.Success("✓ Proceeding with existing key"))
+					fmt.Println(p.Colors.Success(p.Colors.Emoji("✓") + " Proceeding with existing key"))
 					fmt.Println()
 				}
 			} else {
@@ -206,7 +206,7 @@ func handleRegisterValidator(cfg config.Config) {
 		// Commission rate prompt (only if not already registered)
 		var commissionRate string
 		if os.Getenv("COMMISSION_RATE") == "" {
-			p := ui.NewPrinter(flagOutput)
+			p := getPrinter()
 			fmt.Printf("Enter commission rate (1-100%%) [10]: ")
 			input, _ := reader.ReadString('\n')
 			input = strings.TrimSpace(input)
@@ -217,7 +217,7 @@ func handleRegisterValidator(cfg config.Config) {
 				// Parse and validate
 				rate, err := strconv.ParseFloat(input, 64)
 				if err != nil || rate < 1 || rate > 100 {
-					fmt.Println(p.Colors.Error("⚠ Invalid commission rate. Using default 10%"))
+					fmt.Println(p.Colors.Error(p.Colors.Emoji("⚠") + " Invalid commission rate. Using default 10%"))
 					commissionRate = defaultCommissionRate
 				} else {
 					// Convert percentage to decimal (e.g., 15 -> 0.15)
@@ -231,11 +231,11 @@ func handleRegisterValidator(cfg config.Config) {
 
 		// Interactive mode - let user choose stake amount
 		// Pass empty string to trigger the interactive stake selection prompt
-		runRegisterValidator(cfg, moniker, keyName, "", commissionRate, importMnemonic)
+		return runRegisterValidator(cfg, moniker, keyName, "", commissionRate, importMnemonic)
 	} else {
 		// JSON mode or env vars set - use default/env amount
 		commissionRate := getenvDefault("COMMISSION_RATE", defaultCommissionRate)
-		runRegisterValidator(cfg, moniker, keyName, defaultAmount, commissionRate, "")
+		return runRegisterValidator(cfg, moniker, keyName, defaultAmount, commissionRate, "")
 	}
 }
 
@@ -252,7 +252,7 @@ func keyExists(cfg config.Config, keyName string) bool {
 // promptWalletChoice prompts the user to choose between creating a new wallet or importing an existing one.
 // Returns the mnemonic if user chooses to import, empty string otherwise.
 func promptWalletChoice(reader *bufio.Reader) string {
-	p := ui.NewPrinter(flagOutput)
+	p := getPrinter()
 
 	fmt.Println()
 	fmt.Println(p.Colors.Info("Wallet Setup"))
@@ -298,7 +298,7 @@ func promptWalletChoice(reader *bufio.Reader) string {
 	}
 
 	fmt.Println()
-	fmt.Println(p.Colors.Success("✓ Mnemonic format validated"))
+	fmt.Println(p.Colors.Success(p.Colors.Emoji("✓") + " Mnemonic format validated"))
 
 	return mnemonic
 }
@@ -310,7 +310,7 @@ func promptWalletChoice(reader *bufio.Reader) string {
 // - submit create-validator transaction
 // It prints text or JSON depending on --output.
 // If importMnemonic is non-empty, the key will be imported from that mnemonic instead of creating a new one.
-func runRegisterValidator(cfg config.Config, moniker, keyName, amount, commissionRate, importMnemonic string) {
+func runRegisterValidator(cfg config.Config, moniker, keyName, amount, commissionRate, importMnemonic string) error {
 	savedStdin := os.Stdin
 	var tty *os.File
 	if !flagNonInteractive && !term.IsTerminal(int(savedStdin.Fd())) {
@@ -344,7 +344,7 @@ func runRegisterValidator(cfg config.Config, moniker, keyName, amount, commissio
 			} else {
 				fmt.Println("node is still syncing. Run 'push-validator sync' first")
 			}
-			return
+			return fmt.Errorf("node is still syncing")
 		}
 	}
 	v := validator.NewWith(validator.Options{BinPath: findPchaind(), HomeDir: cfg.HomeDir, ChainID: cfg.ChainID, Keyring: cfg.KeyringBackend, GenesisDomain: cfg.GenesisDomain, Denom: cfg.Denom})
@@ -364,14 +364,14 @@ func runRegisterValidator(cfg config.Config, moniker, keyName, amount, commissio
 			if flagOutput == "json" {
 				getPrinter().JSON(map[string]any{"ok": false, "error": err.Error()})
 			} else {
-				p := ui.NewPrinter(flagOutput)
+				p := getPrinter()
 				fmt.Println()
 				fmt.Println(p.Colors.Error("Failed to import wallet"))
 				fmt.Printf("Error: %v\n\n", err)
 				fmt.Println(p.Colors.Info("Please verify your mnemonic phrase and try again."))
 				fmt.Println()
 			}
-			return
+			return fmt.Errorf("failed to import wallet: %w", err)
 		}
 	} else {
 		// Create new key or use existing (original behavior)
@@ -382,7 +382,7 @@ func runRegisterValidator(cfg config.Config, moniker, keyName, amount, commissio
 			} else {
 				fmt.Printf("key error: %v\n", err)
 			}
-			return
+			return fmt.Errorf("key error: %w", err)
 		}
 	}
 
@@ -391,7 +391,7 @@ func runRegisterValidator(cfg config.Config, moniker, keyName, amount, commissio
 		evmAddr = ""
 	}
 
-	p := ui.NewPrinter(flagOutput)
+	p := getPrinter()
 
 	if flagOutput != "json" {
 		// Display appropriate message based on key creation method
@@ -406,12 +406,12 @@ func runRegisterValidator(cfg config.Config, moniker, keyName, amount, commissio
 			fmt.Println()
 		} else if wasImported {
 			// Key was imported from mnemonic - show success message
-			fmt.Println(p.Colors.Success(fmt.Sprintf("✓ Wallet imported successfully: %s", keyInfo.Name)))
+			fmt.Println(p.Colors.Success(p.Colors.Emoji("✓") + fmt.Sprintf(" Wallet imported successfully: %s", keyInfo.Name)))
 			fmt.Println(p.Colors.Apply(p.Colors.Theme.Description, "  (Keep your recovery phrase safe - it controls this wallet)"))
 			fmt.Println()
 		} else {
 			// Existing key - show clear status with reminder
-			fmt.Println(p.Colors.Success(fmt.Sprintf("✓ Using existing key: %s", keyInfo.Name)))
+			fmt.Println(p.Colors.Success(p.Colors.Emoji("✓") + fmt.Sprintf(" Using existing key: %s", keyInfo.Name)))
 			fmt.Println(p.Colors.Apply(p.Colors.Theme.Description, "  (Recovery mnemonic was displayed when this key was first created)"))
 			fmt.Println()
 		}
@@ -430,7 +430,7 @@ func runRegisterValidator(cfg config.Config, moniker, keyName, amount, commissio
 		bal, err := v.Balance(balCtx, keyInfo.Address)
 		cancel()
 		if err != nil {
-			fmt.Printf("⚠️ Balance check failed: %v\n", err)
+			fmt.Printf(p.Colors.Emoji("⚠️") + " Balance check failed: %v\n", err)
 			tries++
 			time.Sleep(2 * time.Second)
 			continue
@@ -440,7 +440,7 @@ func runRegisterValidator(cfg config.Config, moniker, keyName, amount, commissio
 		reqInt := new(big.Int)
 		reqInt.SetString(registrationRequiredBalance, 10)
 		if balInt.Cmp(reqInt) >= 0 {
-			fmt.Println(p.Colors.Success("✅ Sufficient balance"))
+			fmt.Println(p.Colors.Success(p.Colors.Emoji("✅") + " Sufficient balance"))
 			finalBalance = bal
 			break
 		}
@@ -509,7 +509,7 @@ func runRegisterValidator(cfg config.Config, moniker, keyName, amount, commissio
 			// Default to maximum stakeable amount if empty
 			if input == "" {
 				stake = maxStakeable.String()
-				fmt.Printf(p.Colors.Success("✓ Will stake %.6f PC\n"), maxStakePC)
+				fmt.Printf(p.Colors.Success(p.Colors.Emoji("✓") + " Will stake %.6f PC\n"), maxStakePC)
 				fmt.Println()
 				break
 			}
@@ -517,17 +517,17 @@ func runRegisterValidator(cfg config.Config, moniker, keyName, amount, commissio
 			// Parse user input
 			stakeAmount, err := strconv.ParseFloat(input, 64)
 			if err != nil {
-				fmt.Println(p.Colors.Error("⚠ Invalid amount. Enter a number. Try again."))
+				fmt.Println(p.Colors.Error(p.Colors.Emoji("⚠") + " Invalid amount. Enter a number. Try again."))
 				continue
 			}
 
 			// Validate bounds
 			if stakeAmount < minStakePC {
-				fmt.Printf(p.Colors.Error("⚠ Amount too low. Minimum stake is %.1f PC. Try again.\n"), minStakePC)
+				fmt.Printf(p.Colors.Error(p.Colors.Emoji("⚠") + " Amount too low. Minimum stake is %.1f PC. Try again.\n"), minStakePC)
 				continue
 			}
 			if stakeAmount > maxStakePC {
-				fmt.Printf(p.Colors.Error("⚠ Insufficient balance. Maximum: %.1f PC. Try again.\n"), maxStakePC)
+				fmt.Printf(p.Colors.Error(p.Colors.Emoji("⚠") + " Insufficient balance. Maximum: %.1f PC. Try again.\n"), maxStakePC)
 				continue
 			}
 
@@ -535,7 +535,7 @@ func runRegisterValidator(cfg config.Config, moniker, keyName, amount, commissio
 			stakeWei := new(big.Float).Mul(new(big.Float).SetFloat64(stakeAmount), new(big.Float).SetFloat64(1e18))
 			stake = stakeWei.Text('f', 0)
 
-			fmt.Printf(p.Colors.Success("✓ Will stake %.6f PC\n"), stakeAmount)
+			fmt.Printf(p.Colors.Success(p.Colors.Emoji("✓") + " Will stake %.6f PC\n"), stakeAmount)
 			fmt.Println()
 			break
 		}
@@ -555,7 +555,7 @@ func runRegisterValidator(cfg config.Config, moniker, keyName, amount, commissio
 			if strings.Contains(errMsg, "validator already exist") {
 				p := getPrinter()
 				fmt.Println()
-				fmt.Println(p.Colors.Error("❌ Validator registration failed: Validator pubkey already exists"))
+				fmt.Println(p.Colors.Error(p.Colors.Emoji("❌") + " Validator registration failed: Validator pubkey already exists"))
 				fmt.Println()
 				fmt.Println("This validator consensus key is already registered on the network.")
 				fmt.Println()
@@ -574,7 +574,7 @@ func runRegisterValidator(cfg config.Config, moniker, keyName, amount, commissio
 				fmt.Printf("register error: %v\n", err)
 			}
 		}
-		return
+		return fmt.Errorf("validator registration failed: %w", err)
 	}
 
 	// Success output
@@ -583,7 +583,7 @@ func runRegisterValidator(cfg config.Config, moniker, keyName, amount, commissio
 	} else {
 		fmt.Println()
 		p := getPrinter()
-		p.Success("✅ Validator registration successful!")
+		p.Success(p.Colors.Emoji("✅") + " Validator registration successful!")
 		fmt.Println()
 
 		// Display registration details
@@ -620,5 +620,5 @@ func runRegisterValidator(cfg config.Config, moniker, keyName, amount, commissio
 		fmt.Println(p.Colors.Apply(p.Colors.Theme.Description, "  Your validator will appear in the active set after the next epoch."))
 		fmt.Println()
 	}
-	return
+	return nil
 }

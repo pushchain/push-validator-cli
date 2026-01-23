@@ -15,8 +15,8 @@ import (
 	"github.com/pushchain/push-validator-cli/internal/config"
 	"github.com/pushchain/push-validator-cli/internal/cosmovisor"
 	"github.com/pushchain/push-validator-cli/internal/process"
-	"github.com/pushchain/push-validator-cli/internal/validator"
 	ui "github.com/pushchain/push-validator-cli/internal/ui"
+	"github.com/pushchain/push-validator-cli/internal/validator"
 	"golang.org/x/term"
 )
 
@@ -32,34 +32,45 @@ func newSupervisor(homeDir string) process.Supervisor {
 // either --bin flag, PCHAIND or PCHAIN_BIN environment variables, checking the
 // cosmovisor genesis directory, or falling back to PATH lookup.
 func findPchaind() string {
-    if flagBin != "" { return flagBin }
-    if v := os.Getenv("PCHAIND"); v != "" { return v }
-    if v := os.Getenv("PCHAIN_BIN"); v != "" { return v }
+	if flagBin != "" {
+		return flagBin
+	}
+	if v := os.Getenv("PCHAIND"); v != "" {
+		return v
+	}
+	if v := os.Getenv("PCHAIN_BIN"); v != "" {
+		return v
+	}
 
-    // Check cosmovisor genesis directory (primary location after install.sh)
-    // Priority: --home flag > HOME_DIR env > default ~/.pchain
-    homeDir := flagHome
-    if homeDir == "" {
-        homeDir = os.Getenv("HOME_DIR")
-    }
-    if homeDir == "" {
-        if home, err := os.UserHomeDir(); err == nil {
-            homeDir = filepath.Join(home, ".pchain")
-        }
-    }
-    if homeDir != "" {
-        cosmovisorPath := filepath.Join(homeDir, "cosmovisor", "genesis", "bin", "pchaind")
-        if _, err := os.Stat(cosmovisorPath); err == nil {
-            return cosmovisorPath
-        }
-    }
+	// Check cosmovisor genesis directory (primary location after install.sh)
+	// Priority: --home flag > HOME_DIR env > default ~/.pchain
+	homeDir := flagHome
+	if homeDir == "" {
+		homeDir = os.Getenv("HOME_DIR")
+	}
+	if homeDir == "" {
+		if home, err := os.UserHomeDir(); err == nil {
+			homeDir = filepath.Join(home, ".pchain")
+		}
+	}
+	if homeDir != "" {
+		cosmovisorPath := filepath.Join(homeDir, "cosmovisor", "genesis", "bin", "pchaind")
+		if _, err := os.Stat(cosmovisorPath); err == nil {
+			return cosmovisorPath
+		}
+	}
 
-    return "pchaind"
+	return "pchaind"
 }
 
 // getenvDefault returns the environment value for k, or default d
 // when k is not set.
-func getenvDefault(k, d string) string { if v := os.Getenv(k); v != "" { return v }; return d }
+func getenvDefault(k, d string) string {
+	if v := os.Getenv(k); v != "" {
+		return v
+	}
+	return d
+}
 
 // getPrinter returns a UI printer bound to the current --output flag.
 func getPrinter() ui.Printer { return ui.NewPrinter(flagOutput) }
@@ -205,7 +216,7 @@ func findKeyNameByAddress(ctx context.Context, cfg config.Config, accountAddress
 // requiredBalance is in micro-units (upc)
 // Returns true if balance is sufficient, false if check failed
 func waitForSufficientBalance(cfg config.Config, accountAddr string, evmAddr string, requiredBalance string, operationName string) bool {
-	p := ui.NewPrinter(flagOutput)
+	p := getPrinter()
 	v := validator.NewWith(validator.Options{
 		BinPath:       findPchaind(),
 		HomeDir:       cfg.HomeDir,
@@ -222,7 +233,7 @@ func waitForSufficientBalance(cfg config.Config, accountAddr string, evmAddr str
 		cancel()
 
 		if err != nil {
-			fmt.Printf("⚠️ Balance check failed: %v\n", err)
+			fmt.Printf("%s Balance check failed: %v\n", p.Colors.Emoji("⚠️"), err)
 			time.Sleep(2 * time.Second)
 			continue
 		}
@@ -233,7 +244,7 @@ func waitForSufficientBalance(cfg config.Config, accountAddr string, evmAddr str
 		reqInt.SetString(requiredBalance, 10)
 
 		if balInt.Cmp(reqInt) >= 0 {
-			fmt.Println(p.Colors.Success("✅ Sufficient balance"))
+			fmt.Println(p.Colors.Success(p.Colors.Emoji("✅") + " Sufficient balance"))
 			fmt.Println()
 			return true
 		}
@@ -291,7 +302,7 @@ func waitForSufficientBalance(cfg config.Config, accountAddr string, evmAddr str
 	}
 
 	// After max retries, give up
-	fmt.Println(p.Colors.Error("❌ Unable to verify sufficient balance after multiple attempts"))
+	fmt.Println(p.Colors.Error(p.Colors.Emoji("❌") + " Unable to verify sufficient balance after multiple attempts"))
 	fmt.Println()
 	return false
 }

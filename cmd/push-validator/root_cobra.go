@@ -10,9 +10,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/pushchain/push-validator-cli/internal/config"
-	"github.com/pushchain/push-validator-cli/internal/cosmovisor"
 	"github.com/pushchain/push-validator-cli/internal/exitcodes"
-	"github.com/pushchain/push-validator-cli/internal/process"
 	ui "github.com/pushchain/push-validator-cli/internal/ui"
 	"github.com/pushchain/push-validator-cli/internal/update"
 )
@@ -29,10 +27,9 @@ var (
 // actual operations (init, start/stop, sync, status, etc.).
 // updateCheckResult stores the result of background update check
 var (
-	updateCheckResult   *update.CheckResult
-	updateCheckMu       sync.Mutex
+	updateCheckResult *update.CheckResult
+	updateCheckMu     sync.Mutex
 )
-
 
 var rootCmd = &cobra.Command{
 	Use:   "push-validator",
@@ -184,7 +181,7 @@ func init() {
 		Short: "Show node status",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg := loadCfg()
-			sup := process.New(cfg.HomeDir)
+			sup := newSupervisor(cfg.HomeDir)
 			res := computeStatus(cfg, sup)
 
 			// Strict mode: exit non-zero if issues detected
@@ -238,33 +235,18 @@ func init() {
 
 	rootCmd.AddCommand(&cobra.Command{Use: "logs", Short: "Tail node logs", RunE: func(cmd *cobra.Command, args []string) error {
 		cfg := loadCfg()
-		var sup process.Supervisor
-		if detection := cosmovisor.Detect(cfg.HomeDir); detection.Available {
-			sup = process.NewCosmovisor(cfg.HomeDir)
-		} else {
-			sup = process.New(cfg.HomeDir)
-		}
+		sup := newSupervisor(cfg.HomeDir)
 		return handleLogs(sup)
 	}})
 
 	rootCmd.AddCommand(&cobra.Command{Use: "reset", Short: "Reset chain data", RunE: func(cmd *cobra.Command, args []string) error {
 		cfg := loadCfg()
-		var sup process.Supervisor
-		if detection := cosmovisor.Detect(cfg.HomeDir); detection.Available {
-			sup = process.NewCosmovisor(cfg.HomeDir)
-		} else {
-			sup = process.New(cfg.HomeDir)
-		}
+		sup := newSupervisor(cfg.HomeDir)
 		return handleReset(cfg, sup)
 	}})
 	rootCmd.AddCommand(&cobra.Command{Use: "full-reset", Short: "Complete reset (deletes all keys and data)", RunE: func(cmd *cobra.Command, args []string) error {
 		cfg := loadCfg()
-		var sup process.Supervisor
-		if detection := cosmovisor.Detect(cfg.HomeDir); detection.Available {
-			sup = process.NewCosmovisor(cfg.HomeDir)
-		} else {
-			sup = process.New(cfg.HomeDir)
-		}
+		sup := newSupervisor(cfg.HomeDir)
 		return handleFullReset(cfg, sup)
 	}})
 	rootCmd.AddCommand(&cobra.Command{Use: "backup", Short: "Backup config and validator state", RunE: func(cmd *cobra.Command, args []string) error { return handleBackup(loadCfg()) }})
@@ -284,8 +266,7 @@ func init() {
 	// register-validator: interactive flow with optional flag overrides
 	regCmd := &cobra.Command{Use: "register-validator", Short: "Register this node as validator", RunE: func(cmd *cobra.Command, args []string) error {
 		cfg := loadCfg()
-		handleRegisterValidator(cfg)
-		return nil
+		return handleRegisterValidator(cfg)
 	}}
 	regCmd.Flags().BoolVar(&flagRegisterCheckOnly, "check-only", false, "Exit after reporting validator registration status")
 	rootCmd.AddCommand(regCmd)
@@ -296,8 +277,7 @@ func init() {
 		Short: "Restore jailed validator to active status",
 		Long:  "Unjail a validator that was temporarily jailed for downtime, restoring it to the active validator set",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			handleUnjail(loadCfg())
-			return nil
+			return handleUnjail(loadCfg())
 		},
 	}
 	rootCmd.AddCommand(unjailCmd)
@@ -309,8 +289,7 @@ func init() {
 		Short:   "Withdraw validator rewards and commission",
 		Long:    "Withdraw accumulated delegation rewards and optionally withdraw validator commission",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			handleWithdrawRewards(loadCfg())
-			return nil
+			return handleWithdrawRewards(loadCfg())
 		},
 	}
 	rootCmd.AddCommand(withdrawRewardsCmd)
@@ -321,8 +300,7 @@ func init() {
 		Short: "Increase validator stake",
 		Long:  "Delegate additional tokens to increase your validator's stake and voting power",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			handleIncreaseStake(loadCfg())
-			return nil
+			return handleIncreaseStake(loadCfg())
 		},
 	}
 	rootCmd.AddCommand(increaseStakeCmd)
@@ -361,6 +339,9 @@ func loadCfg() config.Config {
 	if flagGenesis != "" {
 		cfg.GenesisDomain = flagGenesis
 	}
+
+	// Warn if using insecure "test" keyring backend
+	cfg.WarnIfTestKeyring()
+
 	return cfg
 }
-

@@ -236,7 +236,7 @@ func getBinaryVersion(cfg config.Config) string {
 
 // printStatusText prints a human-friendly status summary matching the dashboard layout.
 func printStatusText(result statusResult) {
-    c := ui.NewColorConfigFromGlobal()
+    c := getPrinter().Colors
 
     // Build icon/status strings
     nodeIcon := c.StatusIcon("stopped")

@@ -316,3 +316,11 @@ func (c *ColorConfig) Spinner(frame int) string {
 	spinners := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 	return c.Apply(c.Theme.Progress, spinners[frame%len(spinners)])
 }
+
+// Emoji returns the emoji if enabled, otherwise returns an empty string
+func (c *ColorConfig) Emoji(emoji string) string {
+	if c.EmojiEnabled {
+		return emoji
+	}
+	return ""
+}

@@ -9,7 +9,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/pushchain/push-validator-cli/internal/cosmovisor"
-	ui "github.com/pushchain/push-validator-cli/internal/ui"
 )
 
 var cosmovisorCmd = &cobra.Command{
@@ -69,7 +68,7 @@ Example:
 func runCosmovisorStatus(cmd *cobra.Command, args []string) error {
 	cfg := loadCfg()
 	p := getPrinter()
-	c := ui.NewColorConfigFromGlobal()
+	c := getPrinter().Colors
 
 	detection := cosmovisor.Detect(cfg.HomeDir)
 	svc := cosmovisor.New(cfg.HomeDir)
@@ -167,7 +166,7 @@ func runCosmovisorUpgradeInfo(cmd *cobra.Command, args []string) error {
 	}
 
 	p := getPrinter()
-	c := ui.NewColorConfigFromGlobal()
+	c := getPrinter().Colors
 
 	ctx, cancel := context.WithTimeout(cmd.Context(), 2*time.Minute)
 	defer cancel()

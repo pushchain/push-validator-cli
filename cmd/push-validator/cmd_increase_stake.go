@@ -15,7 +15,7 @@ import (
 )
 
 // handleIncreaseStake allows validators to increase their stake after registration
-func handleIncreaseStake(cfg config.Config) {
+func handleIncreaseStake(cfg config.Config) error {
 	v := validator.NewWith(validator.Options{
 		BinPath:       findPchaind(),
 		HomeDir:       cfg.HomeDir,
@@ -35,13 +35,13 @@ func handleIncreaseStake(cfg config.Config) {
 			getPrinter().JSON(map[string]any{"ok": false, "error": valErr.Error()})
 		} else {
 			fmt.Println()
-			fmt.Println(getPrinter().Colors.Error("⚠️ Failed to retrieve validator information"))
+			fmt.Println(getPrinter().Colors.Error(getPrinter().Colors.Emoji("⚠️") + " Failed to retrieve validator information"))
 			fmt.Printf("Error: %v\n\n", valErr)
 			fmt.Println(getPrinter().Colors.Info("Make sure you are registered as a validator first:"))
 			fmt.Println(getPrinter().Colors.Apply(getPrinter().Colors.Theme.Command, "  push-validator register-validator"))
 			fmt.Println()
 		}
-		return
+		return fmt.Errorf("failed to retrieve validator information: %w", valErr)
 	}
 
 	if !myValInfo.IsValidator {
@@ -49,13 +49,13 @@ func handleIncreaseStake(cfg config.Config) {
 			getPrinter().JSON(map[string]any{"ok": false, "error": "not a registered validator"})
 		} else {
 			fmt.Println()
-			fmt.Println(getPrinter().Colors.Error("❌ This node is not registered as a validator"))
+			fmt.Println(getPrinter().Colors.Error(getPrinter().Colors.Emoji("❌") + " This node is not registered as a validator"))
 			fmt.Println()
 			fmt.Println(getPrinter().Colors.Info("To register, use:"))
 			fmt.Println(getPrinter().Colors.Apply(getPrinter().Colors.Theme.Command, "  push-validator register-validator"))
 			fmt.Println()
 		}
-		return
+		return fmt.Errorf("not a registered validator")
 	}
 
 	// Display current validator info
@@ -87,10 +87,10 @@ func handleIncreaseStake(cfg config.Config) {
 		if flagOutput == "json" {
 			getPrinter().JSON(map[string]any{"ok": false, "error": convErr.Error()})
 		} else {
-			fmt.Println(p.Colors.Error("⚠️ Failed to convert validator address"))
+			fmt.Println(p.Colors.Error(p.Colors.Emoji("⚠️") + " Failed to convert validator address"))
 			fmt.Printf("Error: %v\n\n", convErr)
 		}
-		return
+		return fmt.Errorf("failed to convert validator address: %w", convErr)
 	}
 
 	// Get account balance from Cosmos SDK
@@ -102,10 +102,10 @@ func handleIncreaseStake(cfg config.Config) {
 		if flagOutput == "json" {
 			getPrinter().JSON(map[string]any{"ok": false, "error": balErr.Error()})
 		} else {
-			fmt.Println(p.Colors.Error("⚠️ Failed to retrieve balance"))
+			fmt.Println(p.Colors.Error(p.Colors.Emoji("⚠️") + " Failed to retrieve balance"))
 			fmt.Printf("Error: %v\n\n", balErr)
 		}
-		return
+		return fmt.Errorf("failed to retrieve balance: %w", balErr)
 	}
 
 	// Display balance info
@@ -141,12 +141,12 @@ func handleIncreaseStake(cfg config.Config) {
 		if flagOutput == "json" {
 			getPrinter().JSON(map[string]any{"ok": false, "error": "insufficient balance"})
 		} else {
-			fmt.Println(p.Colors.Error("❌ Insufficient balance to delegate"))
+			fmt.Println(p.Colors.Error(p.Colors.Emoji("❌") + " Insufficient balance to delegate"))
 			fmt.Println()
 			fmt.Println("You need at least 0.2 PC to increase stake (0.1 PC to delegate + 0.1 PC for fees).")
 			fmt.Println()
 		}
-		return
+		return fmt.Errorf("insufficient balance")
 	}
 
 	// Prompt for delegation amount
@@ -161,24 +161,24 @@ func handleIncreaseStake(cfg config.Config) {
 		input = strings.TrimSpace(input)
 
 		if input == "" {
-			fmt.Println(p.Colors.Error("⚠ Amount is required. Try again."))
+			fmt.Println(p.Colors.Error(p.Colors.Emoji("⚠") + " Amount is required. Try again."))
 			continue
 		}
 
 		// Parse user input
 		delegateAmount, err := strconv.ParseFloat(input, 64)
 		if err != nil {
-			fmt.Println(p.Colors.Error("⚠ Invalid amount. Enter a number. Try again."))
+			fmt.Println(p.Colors.Error(p.Colors.Emoji("⚠") + " Invalid amount. Enter a number. Try again."))
 			continue
 		}
 
 		// Validate bounds
 		if delegateAmount < minDelegatePC {
-			fmt.Printf(p.Colors.Error("⚠ Amount too low. Minimum delegation is %.1f PC. Try again.\n"), minDelegatePC)
+			fmt.Printf(p.Colors.Error(p.Colors.Emoji("⚠") + " Amount too low. Minimum delegation is %.1f PC. Try again.\n"), minDelegatePC)
 			continue
 		}
 		if delegateAmount > maxDelegatePCVal {
-			fmt.Printf(p.Colors.Error("⚠ Insufficient balance. Maximum: %.1f PC. Try again.\n"), maxDelegatePCVal)
+			fmt.Printf(p.Colors.Error(p.Colors.Emoji("⚠") + " Insufficient balance. Maximum: %.1f PC. Try again.\n"), maxDelegatePCVal)
 			continue
 		}
 
@@ -186,7 +186,7 @@ func handleIncreaseStake(cfg config.Config) {
 		delegateWei := new(big.Float).Mul(new(big.Float).SetFloat64(delegateAmount), new(big.Float).SetFloat64(1e18))
 		delegationAmount = delegateWei.Text('f', 0)
 
-		fmt.Printf(p.Colors.Success("✓ Will delegate %.6f PC\n"), delegateAmount)
+		fmt.Printf(p.Colors.Success(p.Colors.Emoji("✓") + " Will delegate %.6f PC\n"), delegateAmount)
 		fmt.Println()
 		break
 	}
@@ -211,7 +211,7 @@ func handleIncreaseStake(cfg config.Config) {
 				keyName = foundKey
 				if flagOutput != "json" {
 					fmt.Println()
-					fmt.Printf("🔑 Using key: %s\n", keyName)
+					fmt.Printf("%s Using key: %s\n", p.Colors.Emoji("🔑"), keyName)
 				}
 			} else {
 				// Fall back to default if key not found
@@ -229,10 +229,10 @@ func handleIncreaseStake(cfg config.Config) {
 		if flagOutput == "json" {
 			getPrinter().JSON(map[string]any{"ok": false, "error": "could not determine key name"})
 		} else {
-			fmt.Println(p.Colors.Error("⚠️ Could not determine key name"))
+			fmt.Println(p.Colors.Error(p.Colors.Emoji("⚠️") + " Could not determine key name"))
 			fmt.Println()
 		}
-		return
+		return fmt.Errorf("could not determine key name")
 	}
 
 	// Execute delegation
@@ -252,10 +252,10 @@ func handleIncreaseStake(cfg config.Config) {
 			getPrinter().JSON(map[string]any{"ok": false, "error": delegErr.Error()})
 		} else {
 			fmt.Println()
-			fmt.Println(p.Colors.Error("❌ Delegation failed"))
+			fmt.Println(p.Colors.Error(p.Colors.Emoji("❌") + " Delegation failed"))
 			fmt.Printf("Error: %v\n\n", delegErr)
 		}
-		return
+		return fmt.Errorf("delegation transaction failed: %w", delegErr)
 	}
 
 	// Success output
@@ -267,7 +267,7 @@ func handleIncreaseStake(cfg config.Config) {
 		})
 	} else {
 		fmt.Println()
-		p.Success("✅ Delegation successful!")
+		p.Success(p.Colors.Emoji("✅") + " Delegation successful!")
 		fmt.Println()
 
 		// Display delegation details
@@ -291,4 +291,5 @@ func handleIncreaseStake(cfg config.Config) {
 		fmt.Println(p.Colors.Apply(p.Colors.Theme.Command, "     push-validator dashboard"))
 		fmt.Println()
 	}
+	return nil
 }

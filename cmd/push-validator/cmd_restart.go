@@ -34,10 +34,8 @@ var restartCmd = &cobra.Command{
 			detection := cosmovisor.Detect(cfg.HomeDir)
 			if detection.Available {
 				useCosmovisor = true
-				sup = process.NewCosmovisor(cfg.HomeDir)
-			} else {
-				sup = process.New(cfg.HomeDir)
 			}
+			sup = newSupervisor(cfg.HomeDir)
 		} else {
 			sup = process.New(cfg.HomeDir)
 		}

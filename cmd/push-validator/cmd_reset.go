@@ -25,7 +25,7 @@ func handleReset(cfg config.Config, sup process.Supervisor) error {
 		if flagNonInteractive {
 			return fmt.Errorf("reset requires confirmation: use --yes to confirm in non-interactive mode")
 		}
-		fmt.Println(p.Colors.Warning("⚠️  This will reset all chain data (address book will be kept)"))
+		fmt.Println(p.Colors.Warning(p.Colors.Emoji("⚠️") + "  This will reset all chain data (address book will be kept)"))
 		fmt.Println()
 		fmt.Print(p.Colors.Apply(p.Colors.Theme.Prompt, "Confirm reset? (y/N): "))
 		reader := bufio.NewReader(os.Stdin)
@@ -48,7 +48,7 @@ func handleReset(cfg config.Config, sup process.Supervisor) error {
 			if flagOutput == "json" {
 				p.JSON(map[string]any{"ok": false, "error": fmt.Sprintf("failed to stop node: %v", err)})
 			} else {
-				p.Warn(fmt.Sprintf("⚠ Could not stop node gracefully: %v", err))
+				p.Warn(p.Colors.Emoji("⚠") + fmt.Sprintf(" Could not stop node gracefully: %v", err))
 				p.Info("Proceeding with reset (node may need manual cleanup)")
 			}
 		} else if flagOutput != "json" {
@@ -117,7 +117,7 @@ func handleReset(cfg config.Config, sup process.Supervisor) error {
 // handleFullReset performs a complete reset, deleting ALL data including validator keys.
 // Requires explicit confirmation unless --yes flag is used.
 func handleFullReset(cfg config.Config, sup process.Supervisor) error {
-	p := ui.NewPrinter(flagOutput)
+	p := getPrinter()
 
 	// Stop node first and verify it stopped
 	if sup.IsRunning() {
@@ -129,7 +129,7 @@ func handleFullReset(cfg config.Config, sup process.Supervisor) error {
 				p.JSON(map[string]any{"ok": false, "error": fmt.Sprintf("failed to stop node: %v", err)})
 				return err
 			} else {
-				p.Warn(fmt.Sprintf("⚠ Could not stop node: %v", err))
+				p.Warn(p.Colors.Emoji("⚠") + fmt.Sprintf(" Could not stop node: %v", err))
 				fmt.Print(p.Colors.Apply(p.Colors.Theme.Warning, "Continue with full reset anyway? (y/N): "))
 				reader := bufio.NewReader(os.Stdin)
 				response, _ := reader.ReadString('\n')
@@ -145,7 +145,7 @@ func handleFullReset(cfg config.Config, sup process.Supervisor) error {
 
 	if flagOutput != "json" {
 		fmt.Println()
-		fmt.Println(p.Colors.Warning("⚠️  FULL RESET - This will delete EVERYTHING"))
+		fmt.Println(p.Colors.Warning(p.Colors.Emoji("⚠️") + "  FULL RESET - This will delete EVERYTHING"))
 		fmt.Println()
 		fmt.Println("This operation will permanently delete:")
 		fmt.Println(p.Colors.Error("  • All blockchain data"))

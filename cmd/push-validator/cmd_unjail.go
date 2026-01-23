@@ -10,7 +10,6 @@ import (
 
 	"github.com/pushchain/push-validator-cli/internal/config"
 	"github.com/pushchain/push-validator-cli/internal/node"
-	ui "github.com/pushchain/push-validator-cli/internal/ui"
 	"github.com/pushchain/push-validator-cli/internal/validator"
 	"golang.org/x/term"
 )
@@ -21,13 +20,13 @@ import (
 // - prompt for key name
 // - submit unjail transaction
 // - display results
-func handleUnjail(cfg config.Config) {
-	p := ui.NewPrinter(flagOutput)
+func handleUnjail(cfg config.Config) error {
+	p := getPrinter()
 
 	// Step 1: Check sync status
 	if flagOutput != "json" {
 		fmt.Println()
-		fmt.Print(p.Colors.Apply(p.Colors.Theme.Prompt, "🔍 Checking node sync status..."))
+		fmt.Print(p.Colors.Apply(p.Colors.Theme.Prompt, p.Colors.Emoji("🔍")+" Checking node sync status..."))
 	}
 
 	local := strings.TrimRight(cfg.RPCLocal, "/")
@@ -48,12 +47,12 @@ func handleUnjail(cfg config.Config) {
 			getPrinter().JSON(map[string]any{"ok": false, "error": "failed to check sync status"})
 		} else {
 			fmt.Println()
-			fmt.Println(p.Colors.Error("❌ Failed to check sync status"))
+			fmt.Println(p.Colors.Error(p.Colors.Emoji("❌") + " Failed to check sync status"))
 			fmt.Println()
 			fmt.Println(p.Colors.Info("Please verify your node is running and properly configured."))
 			fmt.Println()
 		}
-		return
+		return fmt.Errorf("failed to check sync status")
 	}
 
 	if stLocal.CatchingUp {
@@ -61,22 +60,22 @@ func handleUnjail(cfg config.Config) {
 			getPrinter().JSON(map[string]any{"ok": false, "error": "node is still syncing"})
 		} else {
 			fmt.Println()
-			fmt.Println(p.Colors.Warning("⚠️ Node is still syncing to latest block"))
+			fmt.Println(p.Colors.Warning(p.Colors.Emoji("⚠️") + " Node is still syncing to latest block"))
 			fmt.Println()
 			fmt.Println(p.Colors.Info("Please wait for sync to complete before unjailing."))
 			fmt.Println(p.Colors.Apply(p.Colors.Theme.Command, "  push-validator sync"))
 			fmt.Println()
 		}
-		return
+		return fmt.Errorf("node is still syncing")
 	}
 
 	if flagOutput != "json" {
-		fmt.Println(" " + p.Colors.Success("✓"))
+		fmt.Println(" " + p.Colors.Success(p.Colors.Emoji("✓")))
 	}
 
 	// Step 2: Check validator jail status
 	if flagOutput != "json" {
-		fmt.Print(p.Colors.Apply(p.Colors.Theme.Prompt, "🔍 Checking validator jail status..."))
+		fmt.Print(p.Colors.Apply(p.Colors.Theme.Prompt, p.Colors.Emoji("🔍")+" Checking validator jail status..."))
 	}
 
 	ctx2, cancel2 := context.WithTimeout(context.Background(), 10*time.Second)
@@ -88,10 +87,10 @@ func handleUnjail(cfg config.Config) {
 			getPrinter().JSON(map[string]any{"ok": false, "error": "failed to check validator status"})
 		} else {
 			fmt.Println()
-			fmt.Println(p.Colors.Error("❌ Failed to check validator status"))
+			fmt.Println(p.Colors.Error(p.Colors.Emoji("❌") + " Failed to check validator status"))
 			fmt.Println()
 		}
-		return
+		return fmt.Errorf("failed to check validator status: %w", statusErr)
 	}
 
 	if !myVal.IsValidator {
@@ -99,13 +98,13 @@ func handleUnjail(cfg config.Config) {
 			getPrinter().JSON(map[string]any{"ok": false, "error": "node is not registered as validator"})
 		} else {
 			fmt.Println()
-			fmt.Println(p.Colors.Warning("⚠️ This node is not registered as a validator"))
+			fmt.Println(p.Colors.Warning(p.Colors.Emoji("⚠️") + " This node is not registered as a validator"))
 			fmt.Println()
 			fmt.Println(p.Colors.Info("Register first using:"))
 			fmt.Println(p.Colors.Apply(p.Colors.Theme.Command, "  push-validator register-validator"))
 			fmt.Println()
 		}
-		return
+		return fmt.Errorf("node is not registered as validator")
 	}
 
 	if !myVal.Jailed {
@@ -113,21 +112,21 @@ func handleUnjail(cfg config.Config) {
 			getPrinter().JSON(map[string]any{"ok": false, "error": "validator is not jailed"})
 		} else {
 			fmt.Println()
-			fmt.Println(p.Colors.Success("✓ Validator is active (not jailed)"))
+			fmt.Println(p.Colors.Success(p.Colors.Emoji("✓") + " Validator is active (not jailed)"))
 			fmt.Println()
 			fmt.Println(p.Colors.Info("Status: " + myVal.Status))
 			fmt.Println()
 		}
-		return
+		return fmt.Errorf("validator is not jailed")
 	}
 
 	if flagOutput != "json" {
-		fmt.Println(" " + p.Colors.Success("✓"))
+		fmt.Println(" " + p.Colors.Success(p.Colors.Emoji("✓")))
 	}
 
 	// Step 3: Check if jail period has expired
 	if flagOutput != "json" {
-		fmt.Print(p.Colors.Apply(p.Colors.Theme.Prompt, "🔍 Checking jail expiry..."))
+		fmt.Print(p.Colors.Apply(p.Colors.Theme.Prompt, p.Colors.Emoji("🔍")+" Checking jail expiry..."))
 	}
 
 	jailedUntil := myVal.SlashingInfo.JailedUntil
@@ -136,10 +135,10 @@ func handleUnjail(cfg config.Config) {
 			getPrinter().JSON(map[string]any{"ok": false, "error": "could not determine jail period"})
 		} else {
 			fmt.Println()
-			fmt.Println(p.Colors.Error("❌ Could not determine jail period"))
+			fmt.Println(p.Colors.Error(p.Colors.Emoji("❌") + " Could not determine jail period"))
 			fmt.Println()
 		}
-		return
+		return fmt.Errorf("could not determine jail period")
 	}
 
 	// Check if jail time has passed
@@ -148,18 +147,18 @@ func handleUnjail(cfg config.Config) {
 			getPrinter().JSON(map[string]any{"ok": false, "error": "jail period has not expired", "jailed_until": jailedUntil})
 		} else {
 			fmt.Println()
-			fmt.Println(p.Colors.Warning("⚠️ Jail period has not expired yet"))
+			fmt.Println(p.Colors.Warning(p.Colors.Emoji("⚠️") + " Jail period has not expired yet"))
 			fmt.Println()
 			fmt.Printf("Jailed until: %s\n", jailedUntil)
 			fmt.Println()
 			fmt.Println(p.Colors.Info("Please wait until the jail period expires before attempting to unjail."))
 			fmt.Println()
 		}
-		return
+		return fmt.Errorf("jail period has not expired (until %s)", jailedUntil)
 	}
 
 	if flagOutput != "json" {
-		fmt.Println(" " + p.Colors.Success("✓"))
+		fmt.Println(" " + p.Colors.Success(p.Colors.Emoji("✓")))
 	}
 
 	// Step 4: Auto-derive key name from validator
@@ -181,7 +180,7 @@ func handleUnjail(cfg config.Config) {
 				keyName = foundKey
 				if flagOutput != "json" {
 					fmt.Println()
-					fmt.Printf("🔑 Using key: %s\n", keyName)
+					fmt.Printf("%s Using key: %s\n", p.Colors.Emoji("🔑"), keyName)
 				}
 			} else {
 				// Fall back to default if key not found
@@ -227,7 +226,7 @@ func handleUnjail(cfg config.Config) {
 
 	// Step 5: Check balance for gas fees
 	if flagOutput != "json" {
-		fmt.Print(p.Colors.Apply(p.Colors.Theme.Prompt, "💰 Checking wallet balance for gas fees..."))
+		fmt.Print(p.Colors.Apply(p.Colors.Theme.Prompt, p.Colors.Emoji("💰")+" Checking wallet balance for gas fees..."))
 	}
 
 	// Convert validator address to account address for balance check
@@ -239,10 +238,10 @@ func handleUnjail(cfg config.Config) {
 			getPrinter().JSON(map[string]any{"ok": false, "error": "failed to derive account address"})
 		} else {
 			fmt.Println()
-			fmt.Println(p.Colors.Error("❌ Failed to derive account address"))
+			fmt.Println(p.Colors.Error(p.Colors.Emoji("❌") + " Failed to derive account address"))
 			fmt.Println()
 		}
-		return
+		return fmt.Errorf("failed to derive account address: %w", addrErr)
 	}
 
 	// Get EVM address for display
@@ -261,13 +260,13 @@ func handleUnjail(cfg config.Config) {
 	if flagOutput != "json" && !flagNonInteractive {
 		const requiredForGasFees = "150000000000000000" // 0.15 PC in micro-units, enough for gas (actual: ~0.1037 PC + 1.45x buffer)
 		if !waitForSufficientBalance(cfg, accountAddr, evmAddr, requiredForGasFees, "unjail") {
-			return
+			return fmt.Errorf("insufficient balance for gas fees")
 		}
 	}
 
 	// Step 6: Submit unjail transaction
 	if flagOutput != "json" {
-		fmt.Print(p.Colors.Apply(p.Colors.Theme.Prompt, "📤 Submitting unjail transaction..."))
+		fmt.Print(p.Colors.Apply(p.Colors.Theme.Prompt, p.Colors.Emoji("📤")+" Submitting unjail transaction..."))
 	}
 
 	v := validator.NewWith(validator.Options{
@@ -288,16 +287,16 @@ func handleUnjail(cfg config.Config) {
 			getPrinter().JSON(map[string]any{"ok": false, "error": err.Error()})
 		} else {
 			fmt.Println()
-			fmt.Println(p.Colors.Error("❌ Unjail transaction failed"))
+			fmt.Println(p.Colors.Error(p.Colors.Emoji("❌") + " Unjail transaction failed"))
 			fmt.Println()
 			fmt.Printf("Error: %v\n", err)
 			fmt.Println()
 		}
-		return
+		return fmt.Errorf("unjail transaction failed: %w", err)
 	}
 
 	if flagOutput != "json" {
-		fmt.Println(" " + p.Colors.Success("✓"))
+		fmt.Println(" " + p.Colors.Success(p.Colors.Emoji("✓")))
 	}
 
 	// Success output
@@ -305,7 +304,7 @@ func handleUnjail(cfg config.Config) {
 		getPrinter().JSON(map[string]any{"ok": true, "txhash": txHash})
 	} else {
 		fmt.Println()
-		p.Success("✅ Validator successfully unjailed!")
+		p.Success(p.Colors.Emoji("✅") + " Validator successfully unjailed!")
 		fmt.Println()
 
 		// Display transaction hash
@@ -328,6 +327,7 @@ func handleUnjail(cfg config.Config) {
 		fmt.Println(p.Colors.Apply(p.Colors.Theme.Description, "  Your validator will resume block signing and earning rewards."))
 		fmt.Println()
 	}
+	return nil
 }
 
 // isJailPeriodExpired checks if the jail period has passed

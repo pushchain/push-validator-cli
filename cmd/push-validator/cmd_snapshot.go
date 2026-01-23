@@ -124,7 +124,7 @@ Examples:
   push-validator snapshot extract --target /custom/data/path`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg := loadCfg()
-			p := ui.NewPrinter(flagOutput)
+			p := getPrinter()
 
 			targetDir, _ := cmd.Flags().GetString("target")
 			if targetDir == "" {

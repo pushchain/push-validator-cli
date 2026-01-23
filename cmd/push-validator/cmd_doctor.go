@@ -45,7 +45,7 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 		cfg.HomeDir = flagHome
 	}
 
-	c := ui.NewColorConfigFromGlobal()
+	c := getPrinter().Colors
 	results := []checkResult{}
 
 	// Header

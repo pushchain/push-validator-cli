@@ -9,7 +9,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/pushchain/push-validator-cli/internal/exitcodes"
-	"github.com/pushchain/push-validator-cli/internal/process"
 	syncmon "github.com/pushchain/push-validator-cli/internal/sync"
 )
 
@@ -33,7 +32,7 @@ func init() {
 			if syncRemote == "" {
 				syncRemote = cfg.RemoteRPCURL()
 			}
-			sup := process.New(cfg.HomeDir)
+			sup := newSupervisor(cfg.HomeDir)
 			if syncStuckTimeout <= 0 {
 				if envTimeout := os.Getenv("PNM_SYNC_STUCK_TIMEOUT"); envTimeout != "" {
 					if parsed, err := time.ParseDuration(envTimeout); err == nil {
