@@ -205,16 +205,19 @@ func TestHandleIncreaseStake_NonInteractive_Success(t *testing.T) {
 	origNonInteractive := flagNonInteractive
 	origNoColor := flagNoColor
 	origNoEmoji := flagNoEmoji
+	origYes := flagYes
 	defer func() {
 		flagOutput = origOutput
 		flagNonInteractive = origNonInteractive
 		flagNoColor = origNoColor
 		flagNoEmoji = origNoEmoji
+		flagYes = origYes
 	}()
 	flagOutput = "json"
 	flagNonInteractive = true
 	flagNoColor = true
 	flagNoEmoji = true
+	flagYes = true
 
 	runner := newMockRunner()
 	binPath := findPchaind()
@@ -250,16 +253,19 @@ func TestHandleIncreaseStake_NonInteractive_DelegationFails(t *testing.T) {
 	origNonInteractive := flagNonInteractive
 	origNoColor := flagNoColor
 	origNoEmoji := flagNoEmoji
+	origYes := flagYes
 	defer func() {
 		flagOutput = origOutput
 		flagNonInteractive = origNonInteractive
 		flagNoColor = origNoColor
 		flagNoEmoji = origNoEmoji
+		flagYes = origYes
 	}()
 	flagOutput = "json"
 	flagNonInteractive = true
 	flagNoColor = true
 	flagNoEmoji = true
+	flagYes = true
 
 	runner := newMockRunner()
 	binPath := findPchaind()
@@ -297,16 +303,19 @@ func TestHandleIncreaseStake_NonInteractive_TextSuccess(t *testing.T) {
 	origNonInteractive := flagNonInteractive
 	origNoColor := flagNoColor
 	origNoEmoji := flagNoEmoji
+	origYes := flagYes
 	defer func() {
 		flagOutput = origOutput
 		flagNonInteractive = origNonInteractive
 		flagNoColor = origNoColor
 		flagNoEmoji = origNoEmoji
+		flagYes = origYes
 	}()
 	flagOutput = "text"
 	flagNonInteractive = true
 	flagNoColor = true
 	flagNoEmoji = true
+	flagYes = true
 
 	runner := newMockRunner()
 	binPath := findPchaind()
@@ -341,16 +350,19 @@ func TestHandleIncreaseStake_NonInteractive_KeyDerivationFallback(t *testing.T) 
 	origNonInteractive := flagNonInteractive
 	origNoColor := flagNoColor
 	origNoEmoji := flagNoEmoji
+	origYes := flagYes
 	defer func() {
 		flagOutput = origOutput
 		flagNonInteractive = origNonInteractive
 		flagNoColor = origNoColor
 		flagNoEmoji = origNoEmoji
+		flagYes = origYes
 	}()
 	flagOutput = "json"
 	flagNonInteractive = true
 	flagNoColor = true
 	flagNoEmoji = true
+	flagYes = true
 
 	runner := newMockRunner()
 	binPath := findPchaind()
@@ -617,16 +629,19 @@ func TestHandleIncreaseStake_NonInteractive_DelegationFails_Text(t *testing.T) {
 	origNonInteractive := flagNonInteractive
 	origNoColor := flagNoColor
 	origNoEmoji := flagNoEmoji
+	origYes := flagYes
 	defer func() {
 		flagOutput = origOutput
 		flagNonInteractive = origNonInteractive
 		flagNoColor = origNoColor
 		flagNoEmoji = origNoEmoji
+		flagYes = origYes
 	}()
 	flagOutput = "text"
 	flagNonInteractive = true
 	flagNoColor = true
 	flagNoEmoji = true
+	flagYes = true
 
 	runner := newMockRunner()
 	binPath := findPchaind()

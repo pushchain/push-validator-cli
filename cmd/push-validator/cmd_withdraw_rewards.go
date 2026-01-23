@@ -19,6 +19,10 @@ import (
 // - submit withdraw transaction
 // - display results
 func handleWithdrawRewards(d *Deps) error {
+	if err := checkNodeRunning(d.Sup); err != nil {
+		return err
+	}
+
 	p := getPrinter()
 	cfg := d.Cfg
 

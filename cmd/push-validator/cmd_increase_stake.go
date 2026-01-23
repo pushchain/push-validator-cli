@@ -142,7 +142,18 @@ func handleIncreaseStake(d *Deps) error {
 	// Determine delegation amount
 	delegationAmount := ""
 	if !d.Prompter.IsInteractive() {
-		// In non-interactive mode, use max delegatable amount
+		// In non-interactive mode, require --yes to auto-delegate max amount
+		if !flagYes {
+			if flagOutput == "json" {
+				getPrinter().JSON(map[string]any{"ok": false, "error": "non-interactive mode requires --yes to confirm delegation"})
+			} else {
+				fmt.Println(p.Colors.Error(p.Colors.Emoji("❌") + " Non-interactive mode requires --yes flag to confirm delegation"))
+				fmt.Println()
+				fmt.Printf("  This would delegate %s PC. Run with --yes to confirm.\n", fmt.Sprintf("%.6f", maxDelegatePC))
+				fmt.Println()
+			}
+			return fmt.Errorf("non-interactive mode requires --yes to confirm delegation")
+		}
 		delegationAmount = maxDelegatable.String()
 	} else {
 		// Prompt for delegation amount

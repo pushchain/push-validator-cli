@@ -26,19 +26,6 @@ func TestKeyringBackendEnvOverride(t *testing.T) {
 	}
 }
 
-func TestWarnIfTestKeyring(t *testing.T) {
-	// Reset the warnedOnce flag by creating a new config
-	cfg := Config{KeyringBackend: "test"}
-
-	// This should trigger the warning (but we can't easily capture stderr in this test)
-	// Just verify it doesn't panic
-	cfg.WarnIfTestKeyring()
-
-	// Verify no warning for other backends
-	cfg2 := Config{KeyringBackend: "os"}
-	cfg2.WarnIfTestKeyring() // Should not print anything
-}
-
 func TestDefaults_AllFields(t *testing.T) {
 	// Clear env var if set
 	os.Unsetenv("PUSH_KEYRING_BACKEND")
@@ -139,14 +126,3 @@ func TestRemoteRPCURL(t *testing.T) {
 	}
 }
 
-func TestWarnIfTestKeyring_NonTestBackend(t *testing.T) {
-	backends := []string{"os", "file", "kwallet", "pass", ""}
-
-	for _, backend := range backends {
-		t.Run("backend_"+backend, func(t *testing.T) {
-			cfg := Config{KeyringBackend: backend}
-			// Should not panic and should not print warning
-			cfg.WarnIfTestKeyring()
-		})
-	}
-}

@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"sync"
@@ -32,9 +33,11 @@ var (
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "push-validator",
-	Short: "Push Validator",
-	Long:  "Manage a Push Chain validator node: init, start, status, sync, and admin tasks.",
+	Use:           "push-validator",
+	Short:         "Push Validator",
+	Long:          "Manage a Push Chain validator node: init, start, status, sync, and admin tasks.",
+	SilenceUsage:  true,
+	SilenceErrors: true,
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
 		// Initialize global UI config from flags after parsing but before command execution
 		ui.InitGlobal(ui.Config{
@@ -319,7 +322,10 @@ func init() {
 
 func Execute() {
 	if err := rootCmd.Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		var se silentErr
+		if !errors.As(err, &se) {
+			fmt.Fprintln(os.Stderr, err)
+		}
 		os.Exit(exitcodes.CodeForError(err))
 	}
 }

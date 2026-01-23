@@ -364,13 +364,13 @@ func (lv *LogViewer) styleLogLine(line string, maxWidth int) string {
 	// Pattern matching for common log levels
 	lowerLine := strings.ToLower(line)
 
-	if strings.Contains(lowerLine, "error") || strings.Contains(lowerLine, "fatal") || strings.Contains(lowerLine, "panic") {
+	if strings.Contains(lowerLine, "error") || strings.Contains(lowerLine, "fatal") || strings.Contains(lowerLine, "panic") || strings.Contains(lowerLine, " err ") {
 		style = lipgloss.NewStyle().Foreground(lipgloss.Color("196")) // Red
-	} else if strings.Contains(lowerLine, "warn") || strings.Contains(lowerLine, "warning") {
+	} else if strings.Contains(lowerLine, "warn") || strings.Contains(lowerLine, "warning") || strings.Contains(lowerLine, " wrn ") {
 		style = lipgloss.NewStyle().Foreground(lipgloss.Color("226")) // Yellow
-	} else if strings.Contains(lowerLine, "info") {
-		style = lipgloss.NewStyle().Foreground(lipgloss.Color("82")) // Green
-	} else if strings.Contains(lowerLine, "debug") || strings.Contains(lowerLine, "trace") {
+	} else if strings.Contains(lowerLine, "info") || strings.Contains(lowerLine, " inf ") {
+		style = lipgloss.NewStyle().Foreground(lipgloss.Color("2")) // Green
+	} else if strings.Contains(lowerLine, "debug") || strings.Contains(lowerLine, "trace") || strings.Contains(lowerLine, " dbg ") {
 		style = lipgloss.NewStyle().Foreground(lipgloss.Color("240")) // Gray
 	} else {
 		// Default color

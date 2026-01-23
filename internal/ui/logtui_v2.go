@@ -121,6 +121,22 @@ func RunLogUIV2(ctx context.Context, opts LogUIOptions) error {
 	}
 }
 
+// colorizeLogLine applies ANSI color based on log level
+func colorizeLogLine(line string) string {
+	lower := strings.ToLower(line)
+	switch {
+	case strings.Contains(lower, "error") || strings.Contains(lower, "fatal") || strings.Contains(lower, "panic") || strings.Contains(lower, " err "):
+		return "\033[31m" + line + "\033[0m" // Red
+	case strings.Contains(lower, "warn") || strings.Contains(lower, "warning") || strings.Contains(lower, " wrn "):
+		return "\033[33m" + line + "\033[0m" // Yellow
+	case strings.Contains(lower, "info") || strings.Contains(lower, " inf "):
+		return "\033[32m" + line + "\033[0m" // Green
+	case strings.Contains(lower, "debug") || strings.Contains(lower, "trace") || strings.Contains(lower, " dbg "):
+		return "\033[90m" + line + "\033[0m" // Gray
+	}
+	return line
+}
+
 func streamLogsSimple(ctx context.Context, logPath string, onPrint func()) error {
 	// Wait for file
 	for i := 0; i < 50; i++ {
@@ -170,7 +186,7 @@ func streamLogsSimple(ctx context.Context, logPath string, onPrint func()) error
 		}
 
 		// Print with \r\n for raw mode
-		fmt.Fprint(os.Stdout, strings.TrimSuffix(line, "\n")+"\r\n")
+		fmt.Fprint(os.Stdout, colorizeLogLine(strings.TrimSuffix(line, "\n"))+"\r\n")
 		if onPrint != nil {
 			onPrint()
 		}
@@ -201,7 +217,7 @@ func printRecentLines(f *os.File, out io.Writer, maxLines int, onPrint func()) e
 		return err
 	}
 	for _, line := range buf {
-		fmt.Fprintf(out, "%s\r\n", line)
+		fmt.Fprintf(out, "%s\r\n", colorizeLogLine(line))
 		if onPrint != nil {
 			onPrint()
 		}

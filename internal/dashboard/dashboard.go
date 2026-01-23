@@ -687,13 +687,8 @@ func (m *Dashboard) fetchData(ctx context.Context) (DashboardData, error) {
 
 // getCachedVersion fetches version with caching (5min TTL + PID-based invalidation)
 func (m *Dashboard) getCachedVersion(ctx context.Context, running bool, currentPID int) string {
-	// Don't call pchaind version when node is stopped
-	if !running {
-		return "—"
-	}
-
 	// Invalidate cache if PID changed (process restarted)
-	if currentPID != m.cachedVersionPID {
+	if running && currentPID != m.cachedVersionPID {
 		m.cachedVersion = ""
 		m.cachedVersionPID = currentPID
 		m.cachedVersionAt = time.Time{} // Force immediate fetch

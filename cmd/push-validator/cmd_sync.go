@@ -98,6 +98,9 @@ func init() {
 				syncRemote = cfg.RemoteRPCURL()
 			}
 			sup := newSupervisor(cfg.HomeDir)
+			if err := checkNodeRunning(sup); err != nil {
+				return err
+			}
 			return runSyncCore(cmd.Context(), prodSyncRunner{}, syncCoreOpts{
 				rpc:          syncRPC,
 				remote:       syncRemote,

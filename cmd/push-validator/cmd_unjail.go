@@ -18,6 +18,10 @@ import (
 // - submit unjail transaction
 // - display results
 func handleUnjail(d *Deps) error {
+	if err := checkNodeRunning(d.Sup); err != nil {
+		return err
+	}
+
 	p := getPrinter()
 	cfg := d.Cfg
 

@@ -21,6 +21,32 @@ func newSupervisor(homeDir string) process.Supervisor {
 	return process.NewCosmovisor(homeDir)
 }
 
+// silentErr wraps an error that has already been displayed to the user.
+// Execute() checks for this type and skips re-printing.
+type silentErr struct{ error }
+
+func (e silentErr) Unwrap() error { return e.error }
+
+// checkNodeRunning verifies the node is running and prints a user-friendly
+// error if not. Returns a silentErr so the message is not repeated.
+func checkNodeRunning(sup process.Supervisor) error {
+	if sup.IsRunning() {
+		return nil
+	}
+	if flagOutput == "json" {
+		getPrinter().JSON(map[string]any{"ok": false, "error": "node is not running"})
+	} else {
+		p := getPrinter()
+		fmt.Println()
+		fmt.Println(p.Colors.Error(p.Colors.Emoji("⚠️") + " Node is not running"))
+		fmt.Println()
+		fmt.Println(p.Colors.Info("Start the node with:"))
+		fmt.Println(p.Colors.Apply(p.Colors.Theme.Command, "  push-validator start"))
+		fmt.Println()
+	}
+	return silentErr{fmt.Errorf("node is not running")}
+}
+
 // findPchaind returns the path to the pchaind binary, resolving
 // either --bin flag, PCHAIND or PCHAIN_BIN environment variables, checking the
 // cosmovisor genesis directory, or falling back to PATH lookup.

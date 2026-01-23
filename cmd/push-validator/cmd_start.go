@@ -293,9 +293,6 @@ func handlePostStartFlow(cfg config.Config, p *ui.Printer) bool {
 	// Show status checking message
 	fmt.Println(p.Colors.Info("▸ Checking Validator Status"))
 
-	// Give the node a moment to fully initialize RPC after sync check
-	time.Sleep(2 * time.Second)
-
 	valResult := checkValidatorRegistration(v, 2)
 
 	if valResult.Error != nil {
@@ -378,6 +375,8 @@ func (prodDashboardRunner) Run(cfg config.Config) error {
 		NoEmoji:         flagNoEmoji,
 		CLIVersion:      Version,
 		Debug:           false,
+		Supervisor:      newSupervisor(cfg.HomeDir),
+		BinPath:         findPchaind(),
 	}
 	return runDashboardInteractive(opts)
 }

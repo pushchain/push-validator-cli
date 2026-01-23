@@ -21,6 +21,10 @@ import (
 // - submit delegation transaction
 // - display results
 func handleRestakeRewardsAll(d *Deps) error {
+	if err := checkNodeRunning(d.Sup); err != nil {
+		return err
+	}
+
 	p := getPrinter()
 	cfg := d.Cfg
 

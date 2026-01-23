@@ -12,8 +12,9 @@ import (
 // ValidatorInfo component shows validator-specific information
 type ValidatorInfo struct {
 	BaseComponent
-	data  DashboardData
-	icons Icons
+	data    DashboardData
+	icons   Icons
+	noEmoji bool
 }
 
 // NewValidatorInfo creates a new validator info component
@@ -21,6 +22,7 @@ func NewValidatorInfo(noEmoji bool) *ValidatorInfo {
 	return &ValidatorInfo{
 		BaseComponent: BaseComponent{},
 		icons:         NewIcons(noEmoji),
+		noEmoji:       noEmoji,
 	}
 }
 
@@ -231,7 +233,11 @@ func (c *ValidatorInfo) renderContent(w int) string {
 		// Add status with jail indicator
 		statusText := c.data.MyValidator.Status
 		if c.data.MyValidator.Jailed {
-			statusText = fmt.Sprintf("%s (JAILED)", c.data.MyValidator.Status)
+			if !c.noEmoji {
+				statusText = fmt.Sprintf("\U0001F6A8 %s (JAILED)", c.data.MyValidator.Status)
+			} else {
+				statusText = fmt.Sprintf("%s (JAILED)", c.data.MyValidator.Status)
+			}
 		}
 		rightLines = append(rightLines, statusText)
 		rightLines = append(rightLines, "")

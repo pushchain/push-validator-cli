@@ -109,11 +109,13 @@ func (c *ChainStatus) renderContent(w int) string {
 
 	// Check if node is running and RPC is available
 	if !c.data.NodeInfo.Running || !c.data.Metrics.Node.RPCListening {
-		lines = append(lines, fmt.Sprintf("%s Unknown", c.icons.Err))
-		if remoteHeight > 0 {
-			lines = append(lines, fmt.Sprintf("%s/%s", ui.FormatNumber(localHeight), ui.FormatNumber(remoteHeight)))
+		if !c.data.NodeInfo.Running {
+			lines = append(lines, fmt.Sprintf("%s Stopped", c.icons.Err))
 		} else {
-			lines = append(lines, fmt.Sprintf("Height: %s", ui.FormatNumber(localHeight)))
+			lines = append(lines, fmt.Sprintf("%s RPC unavailable", c.icons.Err))
+		}
+		if remoteHeight > 0 {
+			lines = append(lines, fmt.Sprintf("Network height: %s", ui.FormatNumber(remoteHeight)))
 		}
 	} else {
 		// Always show sync-monitor-style progress bar

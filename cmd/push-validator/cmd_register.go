@@ -242,6 +242,10 @@ var flagRegisterCheckOnly bool
 // handleRegisterValidator is the main entry point for registration.
 // It prompts interactively for moniker and key name if not set via env vars.
 func handleRegisterValidator(d *Deps) error {
+	if err := checkNodeRunning(d.Sup); err != nil {
+		return err
+	}
+
 	cfg := d.Cfg
 	// Get defaults from env or use hardcoded fallbacks
 	defaultMoniker := getenvDefault("MONIKER", "push-validator")

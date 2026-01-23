@@ -206,6 +206,22 @@ func computeStatus(d *Deps) statusResult {
         }
     }
 
+    // If validator info wasn't fetched (node stopped / RPC down), try via remote RPC
+    if !res.IsValidator && res.ValidatorMoniker == "" {
+        valCtx, valCancel := context.WithTimeout(context.Background(), 3*time.Second)
+        myVal, _ := d.Fetcher.GetMyValidator(valCtx, cfg)
+        valCancel()
+        res.IsValidator = myVal.IsValidator
+        if myVal.IsValidator {
+            res.ValidatorMoniker = myVal.Moniker
+            res.VotingPower = myVal.VotingPower
+            res.VotingPct = myVal.VotingPct
+            res.Commission = myVal.Commission
+            res.ValidatorStatus = myVal.Status
+            res.IsJailed = myVal.Jailed
+        }
+    }
+
     // Fetch binary version (best-effort)
     res.BinaryVer = getBinaryVersion(cfg)
 
@@ -263,7 +279,7 @@ func printStatusText(result statusResult) {
     }
 
     syncIcon := c.StatusIcon("offline")
-    syncVal := "N/A"
+    syncVal := "Stopped"
     if result.RPCListening {
         if result.CatchingUp {
             syncIcon = c.StatusIcon("syncing")

@@ -467,12 +467,12 @@ func TestRenderStaticStoppedNode(t *testing.T) {
 	}
 }
 
-// Test getCachedVersion when node is stopped
+// Test getCachedVersion when node is stopped - should still attempt version fetch
 func TestGetCachedVersionStopped(t *testing.T) {
 	opts := Options{
 		Config: config.Config{
-			HomeDir:   "/tmp/test",
-			RPCLocal:  "http://localhost:26657",
+			HomeDir:  "/tmp/test",
+			RPCLocal: "http://localhost:26657",
 		},
 		RefreshInterval: 1 * time.Second,
 		CLIVersion:      "1.0.0",
@@ -482,10 +482,12 @@ func TestGetCachedVersionStopped(t *testing.T) {
 	dashboard := New(opts)
 	ctx := context.Background()
 
+	// Even when stopped, version fetch is attempted (binary exists on disk)
 	version := dashboard.getCachedVersion(ctx, false, 0)
 
-	if version != "—" {
-		t.Errorf("Version for stopped node should be '—', got %q", version)
+	// Without a valid BinPath, falls back to "pchaind" which won't be in PATH during tests
+	if version != "pchaind not found" {
+		t.Errorf("Version for stopped node without BinPath should be 'pchaind not found', got %q", version)
 	}
 }
 
