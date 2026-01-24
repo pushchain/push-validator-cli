@@ -9,7 +9,7 @@ import (
 
 const (
 	cacheFileName = ".update-check"
-	cacheDuration = 24 * time.Hour
+	cacheDuration = 10 * time.Minute
 )
 
 // CacheEntry stores the last update check result
@@ -51,7 +51,7 @@ func SaveCache(homeDir string, entry *CacheEntry) error {
 	return os.WriteFile(path, data, 0644)
 }
 
-// IsCacheValid returns true if cache is fresh (< 24h old)
+// IsCacheValid returns true if cache is fresh (< 10m old)
 func IsCacheValid(entry *CacheEntry) bool {
 	return time.Since(entry.CheckedAt) < cacheDuration
 }
