@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
 	"time"
 )
@@ -33,7 +32,7 @@ func (s *svc) EnsureKey(ctx context.Context, name string) (KeyInfo, error) {
 	}
 
 	// Check if key already exists
-	show := exec.CommandContext(ctx, s.opts.BinPath, "keys", "show", name, "-a", "--keyring-backend", s.opts.Keyring, "--home", s.opts.HomeDir)
+	show := commandContext(ctx, s.opts.BinPath, "keys", "show", name, "-a", "--keyring-backend", s.opts.Keyring, "--home", s.opts.HomeDir)
 	out, err := show.Output()
 	if err == nil {
 		// Key exists - fetch details
@@ -41,7 +40,7 @@ func (s *svc) EnsureKey(ctx context.Context, name string) (KeyInfo, error) {
 	}
 
 	// Key doesn't exist - create it and capture output
-	add := exec.CommandContext(ctx, s.opts.BinPath, "keys", "add", name, "--keyring-backend", s.opts.Keyring, "--algo", "eth_secp256k1", "--home", s.opts.HomeDir)
+	add := commandContext(ctx, s.opts.BinPath, "keys", "add", name, "--keyring-backend", s.opts.Keyring, "--algo", "eth_secp256k1", "--home", s.opts.HomeDir)
 
 	// Capture output to parse mnemonic
 	output, err := add.CombinedOutput()
@@ -53,7 +52,7 @@ func (s *svc) EnsureKey(ctx context.Context, name string) (KeyInfo, error) {
 	mnemonic := extractMnemonic(string(output))
 
 	// Get the address
-	out2, err := exec.CommandContext(ctx, s.opts.BinPath, "keys", "show", name, "-a", "--keyring-backend", s.opts.Keyring, "--home", s.opts.HomeDir).Output()
+	out2, err := commandContext(ctx, s.opts.BinPath, "keys", "show", name, "-a", "--keyring-backend", s.opts.Keyring, "--home", s.opts.HomeDir).Output()
 	if err != nil {
 		return KeyInfo{}, fmt.Errorf("keys show: %w", err)
 	}
@@ -65,7 +64,7 @@ func (s *svc) EnsureKey(ctx context.Context, name string) (KeyInfo, error) {
 // getKeyInfo fetches full key details
 func (s *svc) getKeyInfo(ctx context.Context, name, addr, mnemonic string) (KeyInfo, error) {
 	// Get key details in JSON format
-	cmd := exec.CommandContext(ctx, s.opts.BinPath, "keys", "show", name, "--keyring-backend", s.opts.Keyring, "--home", s.opts.HomeDir, "--output", "json")
+	cmd := commandContext(ctx, s.opts.BinPath, "keys", "show", name, "--keyring-backend", s.opts.Keyring, "--home", s.opts.HomeDir, "--output", "json")
 	out, err := cmd.Output()
 	if err != nil {
 		return KeyInfo{Address: addr, Name: name, Mnemonic: mnemonic}, nil
@@ -176,13 +175,13 @@ func (s *svc) ImportKey(ctx context.Context, name string, mnemonic string) (KeyI
 	}
 
 	// Check if key already exists
-	show := exec.CommandContext(ctx, s.opts.BinPath, "keys", "show", name, "-a", "--keyring-backend", s.opts.Keyring, "--home", s.opts.HomeDir)
+	show := commandContext(ctx, s.opts.BinPath, "keys", "show", name, "-a", "--keyring-backend", s.opts.Keyring, "--home", s.opts.HomeDir)
 	if out, err := show.Output(); err == nil {
 		return KeyInfo{}, fmt.Errorf("key '%s' already exists with address %s", name, strings.TrimSpace(string(out)))
 	}
 
 	// Import key using --recover flag with mnemonic piped via stdin
-	add := exec.CommandContext(ctx, s.opts.BinPath, "keys", "add", name,
+	add := commandContext(ctx, s.opts.BinPath, "keys", "add", name,
 		"--recover",
 		"--keyring-backend", s.opts.Keyring,
 		"--algo", "eth_secp256k1",
@@ -206,7 +205,7 @@ func (s *svc) ImportKey(ctx context.Context, name string, mnemonic string) (KeyI
 	}
 
 	// Get the address of the imported key
-	out2, err := exec.CommandContext(ctx, s.opts.BinPath, "keys", "show", name, "-a", "--keyring-backend", s.opts.Keyring, "--home", s.opts.HomeDir).Output()
+	out2, err := commandContext(ctx, s.opts.BinPath, "keys", "show", name, "-a", "--keyring-backend", s.opts.Keyring, "--home", s.opts.HomeDir).Output()
 	if err != nil {
 		return KeyInfo{}, fmt.Errorf("failed to get imported key address: %w", err)
 	}
@@ -226,7 +225,7 @@ func (s *svc) findExistingKeyByMnemonic(ctx context.Context, name, mnemonic stri
 	}
 	defer os.RemoveAll(tmpDir)
 
-	dryRun := exec.CommandContext(ctx, s.opts.BinPath, "keys", "add", "temp",
+	dryRun := commandContext(ctx, s.opts.BinPath, "keys", "add", "temp",
 		"--recover", "--dry-run",
 		"--keyring-backend", "test",
 		"--algo", "eth_secp256k1",
@@ -247,7 +246,7 @@ func (s *svc) findExistingKeyByMnemonic(ctx context.Context, name, mnemonic stri
 	}
 
 	// List all keys and find the one with matching address
-	listCmd := exec.CommandContext(ctx, s.opts.BinPath, "keys", "list",
+	listCmd := commandContext(ctx, s.opts.BinPath, "keys", "list",
 		"--keyring-backend", s.opts.Keyring,
 		"--home", s.opts.HomeDir,
 		"--output", "json")
@@ -280,7 +279,7 @@ func (s *svc) GetEVMAddress(ctx context.Context, addr string) (string, error) {
 	if s.opts.BinPath == "" {
 		s.opts.BinPath = "pchaind"
 	}
-	cmd := exec.CommandContext(ctx, s.opts.BinPath, "debug", "addr", addr)
+	cmd := commandContext(ctx, s.opts.BinPath, "debug", "addr", addr)
 	out, err := cmd.Output()
 	if err != nil {
 		return "", fmt.Errorf("debug addr: %w", err)
@@ -304,7 +303,7 @@ func (s *svc) IsValidator(ctx context.Context, addr string) (bool, error) {
 		s.opts.BinPath = "pchaind"
 	}
 	// Compare local consensus pubkey with remote validators
-	showVal := exec.CommandContext(ctx, s.opts.BinPath, "tendermint", "show-validator", "--home", s.opts.HomeDir)
+	showVal := commandContext(ctx, s.opts.BinPath, "tendermint", "show-validator", "--home", s.opts.HomeDir)
 	b, err := showVal.Output()
 	if err != nil {
 		return false, fmt.Errorf("show-validator: %w", err)
@@ -320,7 +319,7 @@ func (s *svc) IsValidator(ctx context.Context, addr string) (bool, error) {
 	}
 	// Query validators from remote
 	remote := fmt.Sprintf("https://%s", s.opts.GenesisDomain)
-	q := exec.CommandContext(ctx, s.opts.BinPath, "query", "staking", "validators", "--node", remote, "-o", "json")
+	q := commandContext(ctx, s.opts.BinPath, "query", "staking", "validators", "--node", remote, "-o", "json")
 	vb, err := q.Output()
 	if err != nil {
 		return false, fmt.Errorf("query validators: %w", err)
@@ -354,7 +353,7 @@ func (s *svc) IsAddressValidator(ctx context.Context, cosmosAddr string) (bool, 
 
 	// Query validators from remote
 	remote := fmt.Sprintf("https://%s", s.opts.GenesisDomain)
-	q := exec.CommandContext(ctx, s.opts.BinPath, "query", "staking", "validators", "--node", remote, "-o", "json")
+	q := commandContext(ctx, s.opts.BinPath, "query", "staking", "validators", "--node", remote, "-o", "json")
 	vb, err := q.Output()
 	if err != nil {
 		return false, fmt.Errorf("query validators: %w", err)
@@ -401,7 +400,7 @@ func (s *svc) Balance(ctx context.Context, addr string) (string, error) {
 	}
 	// Always query remote genesis node for canonical state during validator registration
 	remote := fmt.Sprintf("https://%s", s.opts.GenesisDomain)
-	q := exec.CommandContext(ctx, s.opts.BinPath, "query", "bank", "balances", addr, "--node", remote, "-o", "json")
+	q := commandContext(ctx, s.opts.BinPath, "query", "bank", "balances", addr, "--node", remote, "-o", "json")
 	out, err := q.Output()
 	if err != nil {
 		return "0", fmt.Errorf("query balance: %w", err)
@@ -427,7 +426,7 @@ func (s *svc) Register(ctx context.Context, args RegisterArgs) (string, error) {
 	// Prepare validator JSON - use a separate timeout for this command
 	showCtx, showCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer showCancel()
-	pubJSON, err := exec.CommandContext(showCtx, s.opts.BinPath, "tendermint", "show-validator", "--home", s.opts.HomeDir).Output()
+	pubJSON, err := commandContext(showCtx, s.opts.BinPath, "tendermint", "show-validator", "--home", s.opts.HomeDir).Output()
 	if err != nil {
 		return "", fmt.Errorf("show-validator: %w", err)
 	}
@@ -460,7 +459,7 @@ func (s *svc) Register(ctx context.Context, args RegisterArgs) (string, error) {
 	remote := fmt.Sprintf("https://%s", s.opts.GenesisDomain)
 	ctxTimeout, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctxTimeout, s.opts.BinPath, "tx", "staking", "create-validator", tmp.Name(),
+	cmd := commandContext(ctxTimeout, s.opts.BinPath, "tx", "staking", "create-validator", tmp.Name(),
 		"--from", args.KeyName,
 		"--chain-id", s.opts.ChainID,
 		"--keyring-backend", s.opts.Keyring,
@@ -541,7 +540,7 @@ func (s *svc) Unjail(ctx context.Context, keyName string) (string, error) {
 	ctxTimeout, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctxTimeout, s.opts.BinPath, "tx", "slashing", "unjail",
+	cmd := commandContext(ctxTimeout, s.opts.BinPath, "tx", "slashing", "unjail",
 		"--from", keyName,
 		"--chain-id", s.opts.ChainID,
 		"--keyring-backend", s.opts.Keyring,
@@ -608,7 +607,7 @@ func (s *svc) WithdrawRewards(ctx context.Context, validatorAddr string, keyName
 	ctxTimeout, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctxTimeout, s.opts.BinPath, args...)
+	cmd := commandContext(ctxTimeout, s.opts.BinPath, args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		// Extract and enhance error message
@@ -672,7 +671,7 @@ func (s *svc) Delegate(ctx context.Context, args DelegateArgs) (string, error) {
 	ctxTimeout, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctxTimeout, s.opts.BinPath, "tx", "staking", "delegate",
+	cmd := commandContext(ctxTimeout, s.opts.BinPath, "tx", "staking", "delegate",
 		args.ValidatorAddress,
 		fmt.Sprintf("%s%s", args.Amount, s.opts.Denom),
 		"--from", args.KeyName,

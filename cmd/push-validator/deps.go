@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -57,7 +58,41 @@ type Deps struct {
 type execRunner struct{}
 
 func (r *execRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
-	return exec.CommandContext(ctx, name, args...).Output()
+	cmd := exec.CommandContext(ctx, name, args...)
+
+	// Set DYLD_LIBRARY_PATH for macOS to find libwasmvm.dylib
+	// Check multiple potential locations for the dylib
+	dylibPaths := []string{}
+
+	// 1. Same directory as binary
+	binDir := filepath.Dir(name)
+	if binDir != "" && binDir != "." {
+		dylibPaths = append(dylibPaths, binDir)
+	}
+
+	// 2. Common cosmovisor locations
+	homeDir, err := os.UserHomeDir()
+	if err == nil {
+		cosmovisorDirs := []string{
+			filepath.Join(homeDir, ".pchain/cosmovisor/genesis/bin"),
+			filepath.Join(homeDir, ".pchain/cosmovisor/current/bin"),
+		}
+		dylibPaths = append(dylibPaths, cosmovisorDirs...)
+	}
+
+	// Build DYLD_LIBRARY_PATH
+	if len(dylibPaths) > 0 {
+		env := os.Environ()
+		existingPath := os.Getenv("DYLD_LIBRARY_PATH")
+		newPath := strings.Join(dylibPaths, ":")
+		if existingPath != "" {
+			newPath = newPath + ":" + existingPath
+		}
+		env = append(env, "DYLD_LIBRARY_PATH="+newPath)
+		cmd.Env = env
+	}
+
+	return cmd.Output()
 }
 
 // prodFetcher is the production implementation of ValidatorFetcher.

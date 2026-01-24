@@ -15,12 +15,50 @@ import (
 	"github.com/pushchain/push-validator-cli/internal/config"
 )
 
-// resolvePchaindBin finds pchaind binary in PATH or cosmovisor directory.
-func resolvePchaindBin(homeDir string) (string, error) {
-	if bin, err := exec.LookPath("pchaind"); err == nil {
-		return bin, nil
+// commandContext creates an exec.CommandContext with DYLD_LIBRARY_PATH set for macOS
+// to find libwasmvm.dylib in the same directory as the binary
+func commandContext(ctx context.Context, name string, args ...string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, name, args...)
+
+	// Set DYLD_LIBRARY_PATH for macOS to find libwasmvm.dylib
+	// Check multiple potential locations for the dylib
+	dylibPaths := []string{}
+
+	// 1. Same directory as binary
+	binDir := filepath.Dir(name)
+	if binDir != "" && binDir != "." {
+		dylibPaths = append(dylibPaths, binDir)
 	}
-	// Check cosmovisor genesis directory
+
+	// 2. Common cosmovisor locations
+	homeDir, err := os.UserHomeDir()
+	if err == nil {
+		cosmovisorDirs := []string{
+			filepath.Join(homeDir, ".pchain/cosmovisor/genesis/bin"),
+			filepath.Join(homeDir, ".pchain/cosmovisor/current/bin"),
+		}
+		dylibPaths = append(dylibPaths, cosmovisorDirs...)
+	}
+
+	// Build DYLD_LIBRARY_PATH
+	if len(dylibPaths) > 0 {
+		env := os.Environ()
+		existingPath := os.Getenv("DYLD_LIBRARY_PATH")
+		newPath := strings.Join(dylibPaths, ":")
+		if existingPath != "" {
+			newPath = newPath + ":" + existingPath
+		}
+		env = append(env, "DYLD_LIBRARY_PATH="+newPath)
+		cmd.Env = env
+	}
+
+	return cmd
+}
+
+// resolvePchaindBin finds pchaind binary in PATH or cosmovisor directory.
+// Prefers cosmovisor binaries to ensure libwasmvm.dylib compatibility.
+func resolvePchaindBin(homeDir string) (string, error) {
+	// Check cosmovisor genesis directory first (has matching libwasmvm.dylib)
 	cosmovisorPath := filepath.Join(homeDir, "cosmovisor", "genesis", "bin", "pchaind")
 	if _, err := os.Stat(cosmovisorPath); err == nil {
 		return cosmovisorPath, nil
@@ -29,6 +67,10 @@ func resolvePchaindBin(homeDir string) (string, error) {
 	currentPath := filepath.Join(homeDir, "cosmovisor", "current", "bin", "pchaind")
 	if _, err := os.Stat(currentPath); err == nil {
 		return currentPath, nil
+	}
+	// Fallback to PATH (may have dylib compatibility issues)
+	if bin, err := exec.LookPath("pchaind"); err == nil {
+		return bin, nil
 	}
 	return "", fmt.Errorf("pchaind not found in PATH or %s", filepath.Join(homeDir, "cosmovisor"))
 }
@@ -156,7 +198,7 @@ func (f *Fetcher) fetchAllValidators(ctx context.Context, cfg config.Config) (Va
 	}
 
 	remote := fmt.Sprintf("https://%s", cfg.GenesisDomain)
-	cmd := exec.CommandContext(ctx, bin, "query", "staking", "validators", "--node", remote, "-o", "json")
+	cmd := commandContext(ctx, bin, "query", "staking", "validators", "--node", remote, "-o", "json")
 	output, err := cmd.Output()
 	if err != nil {
 		return ValidatorList{}, fmt.Errorf("query validators failed: %w", err)
@@ -234,7 +276,7 @@ func (f *Fetcher) fetchMyValidator(ctx context.Context, cfg config.Config) (MyVa
 	}
 
 	// Get local consensus pubkey using 'tendermint show-validator'
-	showValCmd := exec.CommandContext(ctx, bin, "tendermint", "show-validator", "--home", cfg.HomeDir)
+	showValCmd := commandContext(ctx, bin, "tendermint", "show-validator", "--home", cfg.HomeDir)
 	pubkeyBytes, err := showValCmd.Output()
 	if err != nil {
 		// No validator key file exists
@@ -258,7 +300,7 @@ func (f *Fetcher) fetchMyValidator(ctx context.Context, cfg config.Config) (MyVa
 
 	// Get local node moniker from status (for conflict detection)
 	var localMoniker string
-	statusCmd := exec.CommandContext(ctx, bin, "status", "--node", cfg.RPCLocal)
+	statusCmd := commandContext(ctx, bin, "status", "--node", cfg.RPCLocal)
 	if statusOutput, err := statusCmd.Output(); err == nil {
 		var statusData struct {
 			NodeInfo struct {
@@ -272,7 +314,7 @@ func (f *Fetcher) fetchMyValidator(ctx context.Context, cfg config.Config) (MyVa
 
 	// Fetch all validators to match by consensus pubkey
 	remote := fmt.Sprintf("https://%s", cfg.GenesisDomain)
-	queryCmd := exec.CommandContext(ctx, bin, "query", "staking", "validators", "--node", remote, "-o", "json")
+	queryCmd := commandContext(ctx, bin, "query", "staking", "validators", "--node", remote, "-o", "json")
 	valsOutput, err := queryCmd.Output()
 	if err != nil {
 		return MyValidatorInfo{IsValidator: false}, err
@@ -528,7 +570,7 @@ func GetValidatorRewards(ctx context.Context, cfg config.Config, validatorAddr s
 
 	// Fetch commission rewards
 	commissionRewards := "—"
-	commCmd := exec.CommandContext(queryCtx, bin, "query", "distribution", "commission", validatorAddr, "--node", remote, "-o", "json")
+	commCmd := commandContext(queryCtx, bin, "query", "distribution", "commission", validatorAddr, "--node", remote, "-o", "json")
 	if commOutput, err := commCmd.Output(); err == nil {
 		var commResult struct {
 			Commission struct {
@@ -554,7 +596,7 @@ func GetValidatorRewards(ctx context.Context, cfg config.Config, validatorAddr s
 	// Retry up to 2 times with 2s delay on failure
 	maxRetries := 2
 	for attempt := 0; attempt <= maxRetries; attempt++ {
-		outCmd := exec.CommandContext(queryCtx, bin, "query", "distribution", "validator-outstanding-rewards", validatorAddr, "--node", remote, "-o", "json")
+		outCmd := commandContext(queryCtx, bin, "query", "distribution", "validator-outstanding-rewards", validatorAddr, "--node", remote, "-o", "json")
 		outOutput, outErr = outCmd.Output()
 
 		if outErr == nil {
@@ -644,7 +686,7 @@ func GetEVMAddress(ctx context.Context, validatorAddr string) string {
 		return "—"
 	}
 
-	cmd := exec.CommandContext(ctx, bin, "debug", "addr", validatorAddr)
+	cmd := commandContext(ctx, bin, "debug", "addr", validatorAddr)
 	output, err := cmd.Output()
 	if err != nil {
 		return "—"
@@ -676,7 +718,7 @@ func GetSlashingInfo(ctx context.Context, cfg config.Config, consensusPubkey str
 
 	// Query signing info to get jail details
 	// consensusPubkey should be a JSON string like: {"@type":"/cosmos.crypto.ed25519.PubKey","key":"..."}
-	cmd := exec.CommandContext(ctx, bin, "query", "slashing", "signing-info", consensusPubkey, "--node", remote, "-o", "json")
+	cmd := commandContext(ctx, bin, "query", "slashing", "signing-info", consensusPubkey, "--node", remote, "-o", "json")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return SlashingInfo{}, fmt.Errorf("failed to query slashing info: %w", err)
@@ -730,7 +772,7 @@ func getKeyringAddresses(bin string, cfg config.Config) []string {
 	var addresses []string
 
 	// List all keys in the keyring
-	cmd := exec.Command(bin, "keys", "list", "--keyring-backend", cfg.KeyringBackend, "--home", cfg.HomeDir, "--output", "json")
+	cmd := commandContext(context.Background(), bin, "keys", "list", "--keyring-backend", cfg.KeyringBackend, "--home", cfg.HomeDir, "--output", "json")
 	output, err := cmd.Output()
 	if err != nil {
 		return addresses
