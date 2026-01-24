@@ -135,28 +135,7 @@ func handleFullReset(cfg config.Config, sup process.Supervisor, prompters ...Pro
 		prompter = &ttyPrompter{}
 	}
 
-	// Stop node first and verify it stopped
-	if sup.IsRunning() {
-		if flagOutput != "json" {
-			fmt.Println(p.Colors.Info("Stopping node..."))
-		}
-		if err := sup.Stop(); err != nil {
-			if flagOutput == "json" {
-				p.JSON(map[string]any{"ok": false, "error": fmt.Sprintf("failed to stop node: %v", err)})
-				return err
-			} else {
-				p.Warn(p.Colors.Emoji("⚠") + fmt.Sprintf(" Could not stop node: %v", err))
-				response, pErr := prompter.ReadLine("Continue with full reset anyway? (y/N): ")
-				if pErr != nil || strings.ToLower(strings.TrimSpace(response)) != "y" {
-					p.Info("Full reset cancelled")
-					return nil
-				}
-			}
-		} else if flagOutput != "json" {
-			p.Success("✓ Node stopped")
-		}
-	}
-
+	// Require confirmation before stopping or modifying anything
 	if flagOutput != "json" {
 		fmt.Println()
 		fmt.Println(p.Colors.Warning(p.Colors.Emoji("⚠️") + "  FULL RESET - This will delete EVERYTHING"))
@@ -181,6 +160,28 @@ func handleFullReset(cfg config.Config, sup process.Supervisor, prompters ...Pro
 				fmt.Println(p.Colors.Info("Full reset cancelled"))
 				return nil
 			}
+		}
+	}
+
+	// Stop node after confirmation
+	if sup.IsRunning() {
+		if flagOutput != "json" {
+			fmt.Println(p.Colors.Info("Stopping node..."))
+		}
+		if err := sup.Stop(); err != nil {
+			if flagOutput == "json" {
+				p.JSON(map[string]any{"ok": false, "error": fmt.Sprintf("failed to stop node: %v", err)})
+				return err
+			} else {
+				p.Warn(p.Colors.Emoji("⚠") + fmt.Sprintf(" Could not stop node: %v", err))
+				response, pErr := prompter.ReadLine("Continue with full reset anyway? (y/N): ")
+				if pErr != nil || strings.ToLower(strings.TrimSpace(response)) != "y" {
+					p.Info("Full reset cancelled")
+					return nil
+				}
+			}
+		} else if flagOutput != "json" {
+			p.Success("✓ Node stopped")
 		}
 	}
 

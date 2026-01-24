@@ -12,7 +12,7 @@ import (
 
 // Tests for runRegisterValidatorWithDeps covering the full registration flow.
 
-func TestRunRegisterValidatorWithDeps_NodeSyncing_JSON(t *testing.T) {
+func TestHandleRegisterValidator_NodeSyncing_JSON(t *testing.T) {
 	origOutput := flagOutput
 	origNonInteractive := flagNonInteractive
 	defer func() {
@@ -27,7 +27,7 @@ func TestRunRegisterValidatorWithDeps_NodeSyncing_JSON(t *testing.T) {
 		d.RemoteNode = &mockNodeClient{}
 	})
 
-	err := runRegisterValidatorWithDeps(d, d.Cfg, "myval", "mykey", "1500000000000000000", "0.10", "")
+	err := handleRegisterValidator(d)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -36,7 +36,7 @@ func TestRunRegisterValidatorWithDeps_NodeSyncing_JSON(t *testing.T) {
 	}
 }
 
-func TestRunRegisterValidatorWithDeps_NodeSyncing_Text(t *testing.T) {
+func TestHandleRegisterValidator_NodeSyncing_Text(t *testing.T) {
 	origOutput := flagOutput
 	origNonInteractive := flagNonInteractive
 	origNoColor := flagNoColor
@@ -57,7 +57,7 @@ func TestRunRegisterValidatorWithDeps_NodeSyncing_Text(t *testing.T) {
 		d.RemoteNode = &mockNodeClient{}
 	})
 
-	err := runRegisterValidatorWithDeps(d, d.Cfg, "myval", "mykey", "1500000000000000000", "0.10", "")
+	err := handleRegisterValidator(d)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -295,12 +295,10 @@ func TestRunRegisterValidatorWithDeps_RegistrationError_ValidatorAlreadyExists(t
 		}
 	})
 
+	// "validator already exist" is now treated as success (validator is already registered)
 	err := runRegisterValidatorWithDeps(d, d.Cfg, "myval", "mykey", "1500000000000000000", "0.10", "")
-	if err == nil {
-		t.Fatal("expected error")
-	}
-	if !containsSubstr(err.Error(), "validator registration failed") {
-		t.Errorf("unexpected error: %v", err)
+	if err != nil {
+		t.Fatalf("expected nil (validator already registered treated as success), got: %v", err)
 	}
 }
 
@@ -675,4 +673,68 @@ func (m *balanceRetryMockValidator) ImportKey(ctx context.Context, name string, 
 
 func (m *balanceRetryMockValidator) GetEVMAddress(ctx context.Context, addr string) (string, error) {
 	return m.inner.GetEVMAddress(ctx, addr)
+}
+
+func (m *balanceRetryMockValidator) IsAddressValidator(ctx context.Context, cosmosAddr string) (bool, error) {
+	return m.inner.IsAddressValidator(ctx, cosmosAddr)
+}
+
+func TestRunRegisterValidatorWithDeps_ValidatorAlreadyExists_ReturnsSuccess(t *testing.T) {
+	origOutput := flagOutput
+	origNonInteractive := flagNonInteractive
+	origNoColor := flagNoColor
+	origNoEmoji := flagNoEmoji
+	defer func() {
+		flagOutput = origOutput
+		flagNonInteractive = origNonInteractive
+		flagNoColor = origNoColor
+		flagNoEmoji = origNoEmoji
+	}()
+	flagOutput = "text"
+	flagNonInteractive = true
+	flagNoColor = true
+	flagNoEmoji = true
+
+	d := registerDeps(func(d *Deps) {
+		d.Node = &mockNodeClient{status: node.Status{CatchingUp: false}}
+		d.RemoteNode = &mockNodeClient{}
+		d.Validator = &mockValidator{
+			importKeyResult: validator.KeyInfo{Name: "mykey", Address: "push1test"},
+			balanceResult:   "2000000000000000000",
+			registerErr:     fmt.Errorf("validator already exist"),
+			evmAddrResult:   "0xABCD",
+		}
+	})
+
+	err := runRegisterValidatorWithDeps(d, d.Cfg, "myval", "mykey", "1500000000000000000", "0.10", "word1 word2 word3 word4 word5 word6 word7 word8 word9 word10 word11 word12")
+	if err != nil {
+		t.Fatalf("expected nil (validator already registered treated as success), got: %v", err)
+	}
+}
+
+func TestRunRegisterValidatorWithDeps_ValidatorAlreadyExists_JSON(t *testing.T) {
+	origOutput := flagOutput
+	origNonInteractive := flagNonInteractive
+	defer func() {
+		flagOutput = origOutput
+		flagNonInteractive = origNonInteractive
+	}()
+	flagOutput = "json"
+	flagNonInteractive = true
+
+	d := registerDeps(func(d *Deps) {
+		d.Node = &mockNodeClient{status: node.Status{CatchingUp: false}}
+		d.RemoteNode = &mockNodeClient{}
+		d.Validator = &mockValidator{
+			importKeyResult: validator.KeyInfo{Name: "mykey", Address: "push1test"},
+			balanceResult:   "2000000000000000000",
+			registerErr:     fmt.Errorf("validator already exist"),
+			evmAddrResult:   "0xABCD",
+		}
+	})
+
+	err := runRegisterValidatorWithDeps(d, d.Cfg, "myval", "mykey", "1500000000000000000", "0.10", "word1 word2 word3 word4 word5 word6 word7 word8 word9 word10 word11 word12")
+	if err != nil {
+		t.Fatalf("expected nil (validator already registered treated as success), got: %v", err)
+	}
 }

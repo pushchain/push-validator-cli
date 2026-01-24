@@ -23,7 +23,8 @@ func TestPromptCommissionRate_ValidInput(t *testing.T) {
 }
 
 func TestPromptCommissionRate_InvalidInput(t *testing.T) {
-	p := &mockPrompter{responses: []string{"abc"}}
+	// Invalid input, then empty → falls back to default
+	p := &mockPrompter{responses: []string{"abc", ""}, interactive: true}
 	rate := promptCommissionRate(p, "0.10")
 	if rate != "0.10" {
 		t.Errorf("expected default 0.10, got %s", rate)
@@ -31,7 +32,8 @@ func TestPromptCommissionRate_InvalidInput(t *testing.T) {
 }
 
 func TestPromptCommissionRate_TooHigh(t *testing.T) {
-	p := &mockPrompter{responses: []string{"150"}}
+	// Too high, then empty → falls back to default
+	p := &mockPrompter{responses: []string{"150", ""}, interactive: true}
 	rate := promptCommissionRate(p, "0.10")
 	if rate != "0.10" {
 		t.Errorf("expected default 0.10 for >100, got %s", rate)
@@ -39,18 +41,19 @@ func TestPromptCommissionRate_TooHigh(t *testing.T) {
 }
 
 func TestPromptCommissionRate_TooLow(t *testing.T) {
-	p := &mockPrompter{responses: []string{"0"}}
+	// Too low, then empty → falls back to default
+	p := &mockPrompter{responses: []string{"4", ""}, interactive: true}
 	rate := promptCommissionRate(p, "0.10")
 	if rate != "0.10" {
-		t.Errorf("expected default 0.10 for <1, got %s", rate)
+		t.Errorf("expected default 0.10 for <5, got %s", rate)
 	}
 }
 
 func TestPromptCommissionRate_BoundaryValues(t *testing.T) {
-	p := &mockPrompter{responses: []string{"1"}}
+	p := &mockPrompter{responses: []string{"5"}}
 	rate := promptCommissionRate(p, "0.10")
-	if rate != "0.01" {
-		t.Errorf("expected 0.01 for 1%%, got %s", rate)
+	if rate != "0.05" {
+		t.Errorf("expected 0.05 for 5%%, got %s", rate)
 	}
 
 	p = &mockPrompter{responses: []string{"100"}}
@@ -234,12 +237,11 @@ func TestCollectRegistrationInputs_DefaultValues(t *testing.T) {
 		CommissionRate: "0.10",
 	}
 
+	// Response 0: wallet choice → "" (default = create new)
+	// Response 1: key name prompt → "" (use default)
 	// Moniker prompt is skipped (not "" or "push-validator")
-	// Response 0: key name prompt → "" (use default)
-	// Response 1: wallet choice → "" (default = create new)
-	// Response 2: commission rate → "" (use default 0.10)
 	d.Prompter = &mockPrompter{
-		responses:   []string{"", "", ""},
+		responses:   []string{"", ""},
 		interactive: true,
 	}
 
@@ -252,9 +254,6 @@ func TestCollectRegistrationInputs_DefaultValues(t *testing.T) {
 	}
 	if result.KeyName != "my-key" {
 		t.Errorf("expected keyName my-key, got %s", result.KeyName)
-	}
-	if result.CommissionRate != "0.10" {
-		t.Errorf("expected rate 0.10, got %s", result.CommissionRate)
 	}
 }
 
@@ -275,13 +274,12 @@ func TestCollectRegistrationInputs_CustomValues(t *testing.T) {
 		CommissionRate: "0.10",
 	}
 
-	// Moniker IS "push-validator" so moniker prompt fires
-	// Response 0: moniker → "custom-moniker"
+	// Response 0: wallet choice → "" (default = create new)
 	// Response 1: key name → "custom-key"
-	// Response 2: wallet choice → "" (default = create new)
-	// Response 3: commission rate → "20"
+	// Moniker IS "push-validator" so moniker prompt fires
+	// Response 2: moniker → "custom-moniker"
 	d.Prompter = &mockPrompter{
-		responses:   []string{"custom-moniker", "custom-key", "", "20"},
+		responses:   []string{"", "custom-key", "custom-moniker"},
 		interactive: true,
 	}
 
@@ -294,9 +292,6 @@ func TestCollectRegistrationInputs_CustomValues(t *testing.T) {
 	}
 	if result.KeyName != "custom-key" {
 		t.Errorf("expected custom-key, got %s", result.KeyName)
-	}
-	if result.CommissionRate != "0.20" {
-		t.Errorf("expected 0.20, got %s", result.CommissionRate)
 	}
 }
 
@@ -324,9 +319,9 @@ func TestCollectRegistrationInputs_KeyExists_UseExisting(t *testing.T) {
 	runner.outputs[binPath+" keys show my-key -a --keyring-backend "+cfg.KeyringBackend+" --home "+cfg.HomeDir] = []byte("push1existing\n")
 	d.Runner = runner
 
-	// Response 0: key name → "" (use default "my-key" which exists)
-	// Key exists branch: Response 1: enter different name → "" (use existing)
-	// Response 2: commission rate → ""
+	// Response 0: wallet choice → "" (create new)
+	// Response 1: key name → "" (use default "my-key" which exists)
+	// Key exists branch: Response 2: enter different name → "" (use existing)
 	d.Prompter = &mockPrompter{
 		responses:   []string{"", "", ""},
 		interactive: true,
@@ -370,13 +365,11 @@ func TestCollectRegistrationInputs_KeyExists_EnterNewName(t *testing.T) {
 	runner.errors[binPath+" keys show new-key -a --keyring-backend "+cfg.KeyringBackend+" --home "+cfg.HomeDir] = errMock
 	d.Runner = runner
 
-	// Response 0: key name → "" (use default "existing-key" which exists)
-	// Key exists: Response 1: enter different name → "new-key"
-	// new-key doesn't exist, so wallet choice fires
-	// Response 2: wallet choice → "" (create new)
-	// Response 3: commission rate → "15"
+	// Response 0: wallet choice → "" (create new)
+	// Response 1: key name → "" (use default "existing-key" which exists)
+	// Key exists: Response 2: enter different name → "new-key"
 	d.Prompter = &mockPrompter{
-		responses:   []string{"", "new-key", "", "15"},
+		responses:   []string{"", "", "new-key"},
 		interactive: true,
 	}
 
@@ -386,9 +379,6 @@ func TestCollectRegistrationInputs_KeyExists_EnterNewName(t *testing.T) {
 	}
 	if result.KeyName != "new-key" {
 		t.Errorf("expected new-key, got %s", result.KeyName)
-	}
-	if result.CommissionRate != "0.15" {
-		t.Errorf("expected 0.15, got %s", result.CommissionRate)
 	}
 }
 
@@ -417,12 +407,11 @@ func TestCollectRegistrationInputs_KeyExists_NewNameAlsoExists(t *testing.T) {
 	runner.outputs[binPath+" keys show also-exists -a --keyring-backend "+cfg.KeyringBackend+" --home "+cfg.HomeDir] = []byte("push1b\n")
 	d.Runner = runner
 
-	// Response 0: key name → "" (use default which exists)
-	// Key exists: Response 1: enter different name → "also-exists" (also exists)
-	// Since new key also exists, wallet choice NOT called
-	// Response 2: commission rate → ""
+	// Response 0: wallet choice → "" (create new)
+	// Response 1: key name → "" (use default which exists)
+	// Key exists: Response 2: enter different name → "also-exists" (also exists)
 	d.Prompter = &mockPrompter{
-		responses:   []string{"", "also-exists", ""},
+		responses:   []string{"", "", "also-exists"},
 		interactive: true,
 	}
 

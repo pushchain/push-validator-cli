@@ -65,7 +65,7 @@ func (s *svc) EnsureKey(ctx context.Context, name string) (KeyInfo, error) {
 // getKeyInfo fetches full key details
 func (s *svc) getKeyInfo(ctx context.Context, name, addr, mnemonic string) (KeyInfo, error) {
 	// Get key details in JSON format
-	cmd := exec.CommandContext(ctx, s.opts.BinPath, "keys", "show", name, "--keyring-backend", s.opts.Keyring, "--home", s.opts.HomeDir, "-o", "json")
+	cmd := exec.CommandContext(ctx, s.opts.BinPath, "keys", "show", name, "--keyring-backend", s.opts.Keyring, "--home", s.opts.HomeDir, "--output", "json")
 	out, err := cmd.Output()
 	if err != nil {
 		return KeyInfo{Address: addr, Name: name, Mnemonic: mnemonic}, nil
@@ -198,6 +198,10 @@ func (s *svc) ImportKey(ctx context.Context, name string, mnemonic string) (KeyI
 		if strings.Contains(outStr, "invalid mnemonic") || strings.Contains(outStr, "invalid checksum") {
 			return KeyInfo{}, errors.New("invalid mnemonic phrase: checksum verification failed")
 		}
+		// Handle "duplicated address" - wallet already imported under a different key name
+		if strings.Contains(outStr, "duplicated address") {
+			return s.findExistingKeyByMnemonic(ctx, name, mnemonic)
+		}
 		return KeyInfo{}, fmt.Errorf("key import failed: %w\nOutput: %s", err, outStr)
 	}
 
@@ -210,6 +214,63 @@ func (s *svc) ImportKey(ctx context.Context, name string, mnemonic string) (KeyI
 	addr := strings.TrimSpace(string(out2))
 	// Note: We don't return mnemonic for imported keys (user already has it)
 	return s.getKeyInfo(ctx, name, addr, "")
+}
+
+// findExistingKeyByMnemonic finds an existing key in the keyring that matches the given mnemonic.
+// Used when ImportKey fails with "duplicated address" - the wallet is already imported under a different name.
+func (s *svc) findExistingKeyByMnemonic(ctx context.Context, name, mnemonic string) (KeyInfo, error) {
+	// Use --dry-run with a temp home dir to derive the address without keyring conflicts
+	tmpDir, err := os.MkdirTemp("", "push-key-derive-")
+	if err != nil {
+		return KeyInfo{}, fmt.Errorf("wallet already exists in keyring (use existing key name)")
+	}
+	defer os.RemoveAll(tmpDir)
+
+	dryRun := exec.CommandContext(ctx, s.opts.BinPath, "keys", "add", "temp",
+		"--recover", "--dry-run",
+		"--keyring-backend", "test",
+		"--algo", "eth_secp256k1",
+		"--home", tmpDir,
+		"--output", "json")
+	dryRun.Stdin = strings.NewReader(mnemonic + "\n")
+
+	dryOut, err := dryRun.Output()
+	if err != nil {
+		return KeyInfo{}, fmt.Errorf("wallet already exists in keyring (use existing key name)")
+	}
+
+	var dryKey struct {
+		Address string `json:"address"`
+	}
+	if err := json.Unmarshal(dryOut, &dryKey); err != nil || dryKey.Address == "" {
+		return KeyInfo{}, fmt.Errorf("wallet already exists in keyring (use existing key name)")
+	}
+
+	// List all keys and find the one with matching address
+	listCmd := exec.CommandContext(ctx, s.opts.BinPath, "keys", "list",
+		"--keyring-backend", s.opts.Keyring,
+		"--home", s.opts.HomeDir,
+		"--output", "json")
+	listOut, err := listCmd.Output()
+	if err != nil {
+		return KeyInfo{}, fmt.Errorf("wallet already exists in keyring (use existing key name)")
+	}
+
+	var keys []struct {
+		Name    string `json:"name"`
+		Address string `json:"address"`
+	}
+	if err := json.Unmarshal(listOut, &keys); err != nil {
+		return KeyInfo{}, fmt.Errorf("wallet already exists in keyring (use existing key name)")
+	}
+
+	for _, key := range keys {
+		if key.Address == dryKey.Address {
+			return s.getKeyInfo(ctx, key.Name, key.Address, "")
+		}
+	}
+
+	return KeyInfo{}, fmt.Errorf("wallet already exists in keyring (use existing key name)")
 }
 
 func (s *svc) GetEVMAddress(ctx context.Context, addr string) (string, error) {
@@ -277,6 +338,57 @@ func (s *svc) IsValidator(ctx context.Context, addr string) (bool, error) {
 	}
 	for _, v := range payload.Validators {
 		if strings.EqualFold(v.ConsensusPubkey.Value, pub.Key) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (s *svc) IsAddressValidator(ctx context.Context, cosmosAddr string) (bool, error) {
+	if s.opts.BinPath == "" {
+		s.opts.BinPath = "pchaind"
+	}
+	if cosmosAddr == "" {
+		return false, errors.New("address required")
+	}
+
+	// Query validators from remote
+	remote := fmt.Sprintf("https://%s", s.opts.GenesisDomain)
+	q := exec.CommandContext(ctx, s.opts.BinPath, "query", "staking", "validators", "--node", remote, "-o", "json")
+	vb, err := q.Output()
+	if err != nil {
+		return false, fmt.Errorf("query validators: %w", err)
+	}
+
+	var payload struct {
+		Validators []struct {
+			OperatorAddress string `json:"operator_address"`
+		} `json:"validators"`
+	}
+	if err := json.Unmarshal(vb, &payload); err != nil {
+		return false, err
+	}
+
+	// Compare bech32 addresses: push1<data><checksum> vs pushvaloper1<data><checksum>
+	// The data portion is the same but the 6-char bech32 checksum differs between prefixes.
+	// Strip prefix and checksum to get the comparable data portion.
+	cosmosPrefix := "push1"
+	valPrefix := "pushvaloper1"
+	const bech32ChecksumLen = 6
+
+	addrData := strings.TrimPrefix(cosmosAddr, cosmosPrefix)
+	if addrData == cosmosAddr || len(addrData) <= bech32ChecksumLen {
+		return false, nil
+	}
+	addrData = addrData[:len(addrData)-bech32ChecksumLen]
+
+	for _, v := range payload.Validators {
+		valData := strings.TrimPrefix(v.OperatorAddress, valPrefix)
+		if valData == v.OperatorAddress || len(valData) <= bech32ChecksumLen {
+			continue
+		}
+		valData = valData[:len(valData)-bech32ChecksumLen]
+		if addrData == valData {
 			return true, nil
 		}
 	}
@@ -362,7 +474,21 @@ func (s *svc) Register(ctx context.Context, args RegisterArgs) (string, error) {
 		// Try to extract a clean reason
 		msg := extractErrorLine(string(out))
 		if msg == "" {
-			msg = err.Error()
+			// Last non-empty line usually contains the actual error
+			raw := strings.TrimSpace(string(out))
+			if raw != "" {
+				lines := strings.Split(raw, "\n")
+				for i := len(lines) - 1; i >= 0; i-- {
+					l := strings.TrimSpace(lines[i])
+					if l != "" {
+						msg = l
+						break
+					}
+				}
+			}
+			if msg == "" {
+				msg = err.Error()
+			}
 		}
 		return "", errors.New(msg)
 	}
@@ -381,8 +507,14 @@ func (s *svc) Register(ctx context.Context, args RegisterArgs) (string, error) {
 
 func extractErrorLine(s string) string {
 	for _, l := range strings.Split(s, "\n") {
-		if strings.Contains(l, "rpc error:") || strings.Contains(l, "failed to execute message") || strings.Contains(l, "insufficient") || strings.Contains(l, "unauthorized") {
-			return l
+		if strings.Contains(l, "rpc error:") ||
+			strings.Contains(l, "failed to execute message") ||
+			strings.Contains(l, "insufficient") ||
+			strings.Contains(l, "unauthorized") ||
+			strings.Contains(l, "key not found") ||
+			strings.Contains(l, "failed to convert") ||
+			strings.Contains(l, "account sequence mismatch") {
+			return strings.TrimSpace(l)
 		}
 	}
 	return ""

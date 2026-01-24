@@ -216,3 +216,7 @@ func (m *balanceIncrementingValidator) GetEVMAddress(ctx context.Context, addr s
 	return "", nil
 }
 
+func (m *balanceIncrementingValidator) IsAddressValidator(ctx context.Context, cosmosAddr string) (bool, error) {
+	return false, nil
+}
+

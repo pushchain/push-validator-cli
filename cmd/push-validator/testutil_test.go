@@ -111,8 +111,10 @@ type mockValidator struct {
 	ensureKeyErr    error
 	importKeyResult validator.KeyInfo
 	importKeyErr    error
-	evmAddrResult   string
-	evmAddrErr      error
+	evmAddrResult          string
+	evmAddrErr             error
+	isAddressValidatorRes  bool
+	isAddressValidatorErr  error
 }
 
 func (m *mockValidator) Balance(ctx context.Context, addr string) (string, error) {
@@ -149,6 +151,10 @@ func (m *mockValidator) ImportKey(ctx context.Context, name string, mnemonic str
 
 func (m *mockValidator) GetEVMAddress(ctx context.Context, addr string) (string, error) {
 	return m.evmAddrResult, m.evmAddrErr
+}
+
+func (m *mockValidator) IsAddressValidator(ctx context.Context, cosmosAddr string) (bool, error) {
+	return m.isAddressValidatorRes, m.isAddressValidatorErr
 }
 
 // mockRunner implements CommandRunner for testing.

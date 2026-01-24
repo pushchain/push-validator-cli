@@ -384,16 +384,16 @@ func (f *Fetcher) fetchMyValidator(ctx context.Context, cfg config.Config) (MyVa
 	for _, keyAddr := range keyringAddrs {
 		for _, v := range result.Validators {
 			// Check if validator's operator address matches a key in the keyring
-			// Convert cosmos address to validator operator address for comparison
-			// Both addresses have the same bech32 data, just different prefixes
+			// Compare bech32 data without the 6-char checksum (differs between prefixes)
 			cosmosPrefix := "push1"
 			validatorPrefix := "pushvaloper1"
+			const bech32ChecksumLen = 6
 
-			// Extract the bech32-encoded part (remove prefix)
 			keyAddrData := strings.TrimPrefix(keyAddr, cosmosPrefix)
 			valAddrData := strings.TrimPrefix(v.OperatorAddress, validatorPrefix)
 
-			if keyAddrData != "" && keyAddrData == valAddrData {
+			if len(keyAddrData) > bech32ChecksumLen && len(valAddrData) > bech32ChecksumLen &&
+				keyAddrData[:len(keyAddrData)-bech32ChecksumLen] == valAddrData[:len(valAddrData)-bech32ChecksumLen] {
 				// Found validator controlled by a key in our keyring
 				status := parseStatus(v.Status)
 
@@ -730,7 +730,7 @@ func getKeyringAddresses(bin string, cfg config.Config) []string {
 	var addresses []string
 
 	// List all keys in the keyring
-	cmd := exec.Command(bin, "keys", "list", "--keyring-backend", cfg.KeyringBackend, "--home", cfg.HomeDir, "-o", "json")
+	cmd := exec.Command(bin, "keys", "list", "--keyring-backend", cfg.KeyringBackend, "--home", cfg.HomeDir, "--output", "json")
 	output, err := cmd.Output()
 	if err != nil {
 		return addresses

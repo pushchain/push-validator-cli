@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/pushchain/push-validator-cli/internal/config"
-	"github.com/pushchain/push-validator-cli/internal/node"
 	"github.com/pushchain/push-validator-cli/internal/validator"
 )
 
@@ -45,7 +44,39 @@ func collectRegistrationInputs(d *Deps, defaults registrationInputs) (registrati
 	result := defaults
 	prompter := d.Prompter
 
-	// Moniker prompt
+	// 1. Wallet choice FIRST
+	result.ImportMnemonic = promptWalletChoiceWith(prompter)
+
+	// 2. If NOT importing (create new), ask for key name
+	if result.ImportMnemonic == "" {
+		input, err := prompter.ReadLine(fmt.Sprintf("Enter key name for validator (default: %s): ", defaults.KeyName))
+		if err == nil && input != "" {
+			result.KeyName = input
+		}
+
+		// Check if key already exists
+		if keyExistsWithRunner(d.Cfg, result.KeyName, d.Runner) {
+			p := d.Printer
+			fmt.Println()
+			fmt.Println(p.Colors.Warning(p.Colors.Emoji("⚠") + fmt.Sprintf(" Key '%s' already exists.", result.KeyName)))
+			fmt.Println()
+			fmt.Println(p.Colors.Info("You can use this existing key or create a new one."))
+			fmt.Println(p.Colors.Apply(p.Colors.Theme.Description, "Note: Recovery mnemonics are only shown when creating new keys."))
+
+			newName, err := prompter.ReadLine("\nEnter a different key name (or press ENTER to use existing key): ")
+			if err == nil && newName != "" {
+				result.KeyName = newName
+			} else {
+				fmt.Println()
+				fmt.Println(p.Colors.Success(p.Colors.Emoji("✓") + " Proceeding with existing key"))
+				fmt.Println()
+			}
+		}
+	}
+	// If importing, key name is determined by ImportKey/findExistingKeyByMnemonic
+	// in runRegisterValidatorWithDeps (via keyName = keyInfo.Name)
+
+	// 3. Moniker prompt (always ask)
 	if result.Moniker == "" || result.Moniker == "push-validator" {
 		input, err := prompter.ReadLine(fmt.Sprintf("Enter validator name (moniker) [%s]: ", defaults.Moniker))
 		if err == nil && input != "" {
@@ -53,54 +84,27 @@ func collectRegistrationInputs(d *Deps, defaults registrationInputs) (registrati
 		}
 	}
 
-	// Key name prompt
-	input, err := prompter.ReadLine(fmt.Sprintf("Enter key name for validator (default: %s): ", defaults.KeyName))
-	if err == nil && input != "" {
-		result.KeyName = input
-	}
-
-	// Check if key already exists
-	if keyExistsWithRunner(d.Cfg, result.KeyName, d.Runner) {
-		p := d.Printer
-		fmt.Println()
-		fmt.Println(p.Colors.Warning(p.Colors.Emoji("⚠") + fmt.Sprintf(" Key '%s' already exists.", result.KeyName)))
-		fmt.Println()
-		fmt.Println(p.Colors.Info("You can use this existing key or create a new one."))
-		fmt.Println(p.Colors.Apply(p.Colors.Theme.Description, "Note: Recovery mnemonics are only shown when creating new keys."))
-
-		newName, err := prompter.ReadLine("\nEnter a different key name (or press ENTER to use existing key): ")
-		if err == nil && newName != "" {
-			result.KeyName = newName
-			if !keyExistsWithRunner(d.Cfg, result.KeyName, d.Runner) {
-				result.ImportMnemonic = promptWalletChoiceWith(prompter)
-			}
-		} else {
-			fmt.Println()
-			fmt.Println(p.Colors.Success(p.Colors.Emoji("✓") + " Proceeding with existing key"))
-			fmt.Println()
-		}
-	} else {
-		result.ImportMnemonic = promptWalletChoiceWith(prompter)
-	}
-
-	// Commission rate prompt
-	result.CommissionRate = promptCommissionRate(prompter, defaults.CommissionRate)
-
 	return result, nil
 }
 
 // promptCommissionRate prompts for the commission rate and validates it.
 func promptCommissionRate(prompter Prompter, defaultRate string) string {
-	input, err := prompter.ReadLine("Enter commission rate (1-100%) [10]: ")
-	if err != nil || input == "" {
-		return defaultRate
-	}
+	for {
+		input, err := prompter.ReadLine("Enter commission rate (5-100%) [10]: ")
+		if err != nil || input == "" {
+			return defaultRate
+		}
 
-	rate, err := strconv.ParseFloat(input, 64)
-	if err != nil || rate < 1 || rate > 100 {
-		return defaultRate
+		rate, err := strconv.ParseFloat(input, 64)
+		if err != nil || rate < 5 || rate > 100 {
+			fmt.Println("Invalid rate. Please enter a value between 5 and 100.")
+			if !prompter.IsInteractive() {
+				return defaultRate
+			}
+			continue
+		}
+		return fmt.Sprintf("%.2f", rate/100)
 	}
-	return fmt.Sprintf("%.2f", rate/100)
 }
 
 // promptWalletChoiceWith prompts the user to choose between creating a new wallet or importing.
@@ -112,32 +116,41 @@ func promptWalletChoiceWith(prompter Prompter) string {
 	fmt.Println("  [2] Import existing wallet (use your recovery phrase)")
 	fmt.Println()
 
-	choice, _ := prompter.ReadLine("Choose option [1]: ")
+	var choice string
+	for {
+		choice, _ = prompter.ReadLine("Choose option [1]: ")
+		if choice == "" || choice == "1" || choice == "2" {
+			break
+		}
+		fmt.Println("Invalid option. Please enter 1 or 2.")
+	}
 
 	if choice != "2" {
 		return ""
 	}
 
-	fmt.Println()
-	fmt.Println("Enter your recovery mnemonic phrase (12 or 24 words):")
+	for {
+		fmt.Println()
+		fmt.Println("Enter your recovery mnemonic phrase (12 or 24 words):")
 
-	mnemonic, err := prompter.ReadLine("> ")
-	if err != nil {
-		return ""
+		mnemonic, err := prompter.ReadLine("> ")
+		if err != nil {
+			return ""
+		}
+
+		// Normalize the mnemonic
+		mnemonic = strings.TrimSpace(mnemonic)
+		mnemonic = strings.Join(strings.Fields(mnemonic), " ")
+		mnemonic = strings.ToLower(mnemonic)
+
+		if err := validator.ValidateMnemonic(mnemonic); err != nil {
+			fmt.Printf("Invalid mnemonic: %v\n", err)
+			continue
+		}
+
+		fmt.Println("Mnemonic format validated")
+		return mnemonic
 	}
-
-	// Normalize the mnemonic
-	mnemonic = strings.TrimSpace(mnemonic)
-	mnemonic = strings.Join(strings.Fields(mnemonic), " ")
-	mnemonic = strings.ToLower(mnemonic)
-
-	if err := validator.ValidateMnemonic(mnemonic); err != nil {
-		fmt.Printf("Invalid mnemonic: %v\n", err)
-		return ""
-	}
-
-	fmt.Println("Mnemonic format validated")
-	return mnemonic
 }
 
 // selectStakeAmount prompts for and validates the stake amount.
@@ -239,6 +252,65 @@ func waitForFunding(v validator.Service, prompter Prompter, address string, maxR
 
 var flagRegisterCheckOnly bool
 
+// maybePromptUnjail checks if the validator is jailed and offers to unjail inline.
+func maybePromptUnjail(d *Deps, valInfo validator.MyValidatorInfo, keyName string) {
+	if !valInfo.Jailed {
+		return
+	}
+
+	p := getPrinter()
+	fmt.Println(p.Colors.Warning(p.Colors.Emoji("⚠️") + "  Validator is currently jailed"))
+	if valInfo.SlashingInfo.JailReason != "" {
+		fmt.Printf("   Reason: %s\n", valInfo.SlashingInfo.JailReason)
+	}
+
+	// Tombstoned validators cannot be unjailed
+	if valInfo.SlashingInfo.Tombstoned {
+		fmt.Println(p.Colors.Error("   Validator is tombstoned and cannot be unjailed."))
+		fmt.Println()
+		return
+	}
+
+	// Check if jail period has expired
+	if valInfo.SlashingInfo.JailedUntil != "" && !isJailPeriodExpired(valInfo.SlashingInfo.JailedUntil) {
+		fmt.Printf("   Jailed until: %s\n", valInfo.SlashingInfo.JailedUntil)
+		fmt.Println("   Jail period has not expired yet. Run 'push-validator unjail' later.")
+		fmt.Println()
+		return
+	}
+
+	if !d.Prompter.IsInteractive() {
+		fmt.Println("   Run 'push-validator unjail' to restore validator.")
+		fmt.Println()
+		return
+	}
+
+	// Prompt to unjail
+	answer, _ := d.Prompter.ReadLine("   Unjail validator now? (y/n) [y]: ")
+	if answer != "" && answer != "y" && answer != "Y" {
+		fmt.Println("   Run 'push-validator unjail' when ready.")
+		fmt.Println()
+		return
+	}
+
+	// Execute unjail
+	fmt.Print(p.Colors.Apply(p.Colors.Theme.Prompt, "   Submitting unjail transaction..."))
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	txHash, err := d.Validator.Unjail(ctx, keyName)
+	if err != nil {
+		fmt.Println()
+		fmt.Printf("   Unjail failed: %v\n", err)
+		fmt.Println("   Try 'push-validator unjail' manually.")
+		fmt.Println()
+		return
+	}
+	fmt.Println()
+	fmt.Println(p.Colors.Success(p.Colors.Emoji("✓") + " Validator unjailed successfully!"))
+	fmt.Printf("   TX: %s\n", txHash)
+	fmt.Println()
+}
+
 // handleRegisterValidator is the main entry point for registration.
 // It prompts interactively for moniker and key name if not set via env vars.
 func handleRegisterValidator(d *Deps) error {
@@ -247,6 +319,28 @@ func handleRegisterValidator(d *Deps) error {
 	}
 
 	cfg := d.Cfg
+
+	// Check sync status before prompting user for input
+	{
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		stLocal, err1 := d.Node.Status(ctx)
+		_, err2 := d.RemoteNode.RemoteStatus(ctx, cfg.RemoteRPCURL())
+		cancel()
+		if err1 == nil && err2 == nil && stLocal.CatchingUp {
+			if flagOutput == "json" {
+				getPrinter().JSON(map[string]any{"ok": false, "error": "node is still syncing"})
+			} else {
+				p := getPrinter()
+				fmt.Println()
+				fmt.Println(p.Colors.Warning(p.Colors.Emoji("⚠️") + " Node is still syncing to latest block"))
+				fmt.Println()
+				fmt.Println(p.Colors.Info("Please wait for sync to complete before registering."))
+				fmt.Println(p.Colors.Apply(p.Colors.Theme.Command, "  push-validator sync"))
+				fmt.Println()
+			}
+			return silentErr{fmt.Errorf("node is still syncing")}
+		}
+	}
 	// Get defaults from env or use hardcoded fallbacks
 	defaultMoniker := getenvDefault("MONIKER", "push-validator")
 	defaultKeyName := getenvDefault("KEY_NAME", "validator-key")
@@ -270,6 +364,11 @@ func handleRegisterValidator(d *Deps) error {
 		}
 		return fmt.Errorf("failed to verify validator status: %w", statusErr)
 	}
+	// Fetch validator info (used for jail status check and moniker conflict detection)
+	monikerCheckCtx, monikerCheckCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	myValInfo, monikerErr := d.Fetcher.GetMyValidator(monikerCheckCtx, cfg)
+	monikerCheckCancel()
+
 	if flagRegisterCheckOnly {
 		if flagOutput == "json" {
 			getPrinter().JSON(map[string]any{"ok": true, "registered": isValAlready})
@@ -303,13 +402,9 @@ func handleRegisterValidator(d *Deps) error {
 			fmt.Println(p.Colors.Apply(p.Colors.Theme.Command, "     push-validator status"))
 			fmt.Println()
 		}
+		maybePromptUnjail(d, myValInfo, keyName)
 		return nil
 	}
-
-	// Check for moniker conflicts before prompting for registration
-	monikerCheckCtx, monikerCheckCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	myValInfo, monikerErr := d.Fetcher.GetMyValidator(monikerCheckCtx, cfg)
-	monikerCheckCancel()
 	if monikerErr == nil && myValInfo.ValidatorExistsWithSameMoniker {
 		if flagOutput == "json" {
 			getPrinter().JSON(map[string]any{
@@ -368,42 +463,17 @@ func keyExistsWithRunner(cfg config.Config, keyName string, runner CommandRunner
 // injected dependencies. If d is nil, production dependencies are created.
 func runRegisterValidatorWithDeps(d *Deps, cfg config.Config, moniker, keyName, amount, commissionRate, importMnemonic string) error {
 	// Use injected deps or create production ones
-	var nodeClient node.Client
-	var remoteClient node.Client
 	var v validator.Service
 	var prompter Prompter
 
 	if d != nil {
-		nodeClient = d.Node
-		remoteClient = d.RemoteNode
 		v = d.Validator
 		prompter = d.Prompter
 	} else {
-		local := strings.TrimRight(cfg.RPCLocal, "/")
-		if local == "" {
-			local = "http://127.0.0.1:26657"
-		}
-		remoteHTTP := cfg.RemoteRPCURL()
-		nodeClient = node.New(local)
-		remoteClient = node.New(remoteHTTP)
 		v = validator.NewWith(validator.Options{BinPath: findPchaind(), HomeDir: cfg.HomeDir, ChainID: cfg.ChainID, Keyring: cfg.KeyringBackend, GenesisDomain: cfg.GenesisDomain, Denom: cfg.Denom})
 		prompter = &ttyPrompter{}
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	stLocal, err1 := nodeClient.Status(ctx)
-	_, err2 := remoteClient.RemoteStatus(ctx, cfg.RemoteRPCURL())
-	if err1 == nil && err2 == nil {
-		if stLocal.CatchingUp {
-			if flagOutput == "json" {
-				getPrinter().JSON(map[string]any{"ok": false, "error": "node is still syncing"})
-			} else {
-				fmt.Println("node is still syncing. Run 'push-validator sync' first")
-			}
-			return fmt.Errorf("node is still syncing")
-		}
-	}
 	ctx2, cancel2 := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel2()
 
@@ -429,6 +499,27 @@ func runRegisterValidatorWithDeps(d *Deps, cfg config.Config, moniker, keyName, 
 			}
 			return fmt.Errorf("failed to import wallet: %w", err)
 		}
+
+		// Check if imported wallet already controls a validator on a different node
+		addrCtx, addrCancel := context.WithTimeout(context.Background(), 20*time.Second)
+		isAddrVal, _ := v.IsAddressValidator(addrCtx, keyInfo.Address)
+		addrCancel()
+		if isAddrVal {
+			if flagOutput == "json" {
+				getPrinter().JSON(map[string]any{"ok": false, "error": "wallet already controls a validator on another node"})
+			} else {
+				p := getPrinter()
+				fmt.Println()
+				fmt.Println(p.Colors.Error(p.Colors.Emoji("❌") + " This wallet is already associated with a validator on a different node."))
+				fmt.Println()
+				fmt.Println("To use this validator on this machine, copy the original")
+				fmt.Println("priv_validator_key.json from the machine where it was first registered.")
+				fmt.Println()
+			}
+			return fmt.Errorf("wallet already controls a validator on another node")
+		}
+		// Update keyName to match actual key in keyring (may differ if duplicated address was resolved)
+		keyName = keyInfo.Name
 	} else {
 		// Create new key or use existing (original behavior)
 		keyInfo, err = v.EnsureKey(ctx2, keyName)
@@ -440,6 +531,16 @@ func runRegisterValidatorWithDeps(d *Deps, cfg config.Config, moniker, keyName, 
 			}
 			return fmt.Errorf("key error: %w", err)
 		}
+	}
+
+	// Prompt for commission rate after wallet is validated
+	if commissionRate == "" || commissionRate == defaultCommissionRate {
+		if prompter.IsInteractive() {
+			commissionRate = promptCommissionRate(prompter, defaultCommissionRate)
+		}
+	}
+	if commissionRate == "" {
+		commissionRate = defaultCommissionRate
 	}
 
 	evmAddr, err := v.GetEVMAddress(ctx2, keyInfo.Address)
@@ -498,37 +599,43 @@ func runRegisterValidatorWithDeps(d *Deps, cfg config.Config, moniker, keyName, 
 			return stakeErr
 		}
 	}
+
+	// If stake is 0 (imported wallet, no additional staking), skip registration
 	// Create fresh context for registration transaction (independent of earlier operations)
 	regCtx, regCancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer regCancel()
 	txHash, err := v.Register(regCtx, validator.RegisterArgs{Moniker: moniker, Amount: stake, KeyName: keyName, CommissionRate: commissionRate, MinSelfDelegation: defaultMinSelfDelegation})
 	if err != nil {
 		errMsg := err.Error()
+		// If validator already exists, treat as success (wallet was imported/created successfully)
+		if strings.Contains(errMsg, "validator already exist") {
+			if flagOutput == "json" {
+				getPrinter().JSON(map[string]any{"ok": true, "registered": true, "message": "validator already registered", "key_name": keyName})
+			} else {
+				p := getPrinter()
+				fmt.Println()
+				fmt.Println(p.Colors.Success(p.Colors.Emoji("✓") + " This node is already registered as a validator"))
+				fmt.Println()
+				fmt.Println("Your validator is active on the network.")
+				fmt.Println()
+				fmt.Println(p.Colors.Info("  Check your validator:"))
+				fmt.Println(p.Colors.Apply(p.Colors.Theme.Command, "     push-validator validators"))
+				fmt.Println()
+				fmt.Println(p.Colors.Info("  Monitor node status:"))
+				fmt.Println(p.Colors.Apply(p.Colors.Theme.Command, "     push-validator status"))
+				fmt.Println()
+			}
+			return nil
+		}
 		if flagOutput == "json" {
 			getPrinter().JSON(map[string]any{"ok": false, "error": errMsg})
 		} else {
-			// Check if this is a "validator already exists" error
-			if strings.Contains(errMsg, "validator already exist") {
-				p := getPrinter()
-				fmt.Println()
-				fmt.Println(p.Colors.Error(p.Colors.Emoji("❌") + " Validator registration failed: Validator pubkey already exists"))
-				fmt.Println()
-				fmt.Println("This validator consensus key is already registered on the network.")
-				fmt.Println()
-				p.Section("Resolution Options")
-				fmt.Println()
-				fmt.Println(p.Colors.Info("  1. Check existing validators:"))
-				fmt.Println(p.Colors.Apply(p.Colors.Theme.Command, "     push-validator validators"))
-				fmt.Println()
-				fmt.Println(p.Colors.Info("  2. To register a new validator, reset node data:"))
-				fmt.Println(p.Colors.Apply(p.Colors.Theme.Command, "     push-validator reset"))
-				fmt.Println(p.Colors.Apply(p.Colors.Theme.Description, "     (This will generate new validator keys)"))
-				fmt.Println()
-				fmt.Println(p.Colors.Apply(p.Colors.Theme.Description, "  Note: Resetting will create a new validator identity."))
-				fmt.Println()
-			} else {
-				fmt.Printf("register error: %v\n", err)
-			}
+			p := getPrinter()
+			fmt.Println()
+			fmt.Println(p.Colors.Error(p.Colors.Emoji("❌") + " Registration failed"))
+			fmt.Println()
+			fmt.Println(p.Colors.Apply(p.Colors.Theme.Description, "  Error: "+errMsg))
+			fmt.Println()
 		}
 		return fmt.Errorf("validator registration failed: %w", err)
 	}

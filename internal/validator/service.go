@@ -17,6 +17,7 @@ type Service interface {
     ImportKey(ctx context.Context, name string, mnemonic string) (KeyInfo, error) // imports key from mnemonic
     GetEVMAddress(ctx context.Context, addr string) (string, error)               // returns hex/EVM address
     IsValidator(ctx context.Context, addr string) (bool, error)
+    IsAddressValidator(ctx context.Context, cosmosAddr string) (bool, error) // checks if address controls a validator
     Balance(ctx context.Context, addr string) (string, error) // denom string for now
     Register(ctx context.Context, args RegisterArgs) (string, error) // returns tx hash
     Unjail(ctx context.Context, keyName string) (string, error) // returns tx hash

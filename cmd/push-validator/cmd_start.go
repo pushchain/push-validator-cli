@@ -559,6 +559,9 @@ func createSnapshotProgressCallback(output string) snapshot.ProgressFunc {
 					message = message[:57] + "..."
 				}
 				fmt.Printf("\r  → Extracting: %-60s", message)
+				if current == total && total > 0 {
+					fmt.Println()
+				}
 			}
 		}
 	}
