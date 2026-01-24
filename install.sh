@@ -223,11 +223,11 @@ download_with_progress() {
             # Get size for percentage reporting
             total_size=$(curl -sLI "$url" 2>/dev/null | grep -i '^content-length:' | tail -1 | awk '{print $2}' | tr -d '\r\n')
             total_size=${total_size:-0}
-            curl -sL -o "$output_file" "$url" &
+            curl -sL -o "$output_file" "$url" < /dev/null &
         else
             total_size=$(wget --spider --server-response "$url" 2>&1 | grep -i 'content-length:' | tail -1 | awk '{print $2}' | tr -d '\r\n')
             total_size=${total_size:-0}
-            wget -q -O "$output_file" "$url" &
+            wget -q -O "$output_file" "$url" < /dev/null &
         fi
         local dl_pid=$!
         local last_threshold=-1
@@ -262,10 +262,10 @@ download_with_progress() {
     start_epoch=$(date +%s)
 
     if [[ $use_curl -eq 1 ]]; then
-        curl -sL -o "$output_file" "$url" &
+        curl -sL -o "$output_file" "$url" < /dev/null &
         dl_pid=$!
     else
-        wget -q -O "$output_file" "$url" &
+        wget -q -O "$output_file" "$url" < /dev/null &
         dl_pid=$!
     fi
 
@@ -299,9 +299,9 @@ node_running() {
     local TO; TO=$(timeout_cmd)
     local status_json
     if [[ -n "$TO" ]]; then
-        status_json=$($TO 2 "$MANAGER_BIN" status --output json 2>/dev/null || echo "{}")
+        status_json=$($TO 2 "$MANAGER_BIN" status --output json < /dev/null 2>/dev/null || echo "{}")
     else
-        status_json=$("$MANAGER_BIN" status --output json 2>/dev/null || echo "{}")
+        status_json=$("$MANAGER_BIN" status --output json < /dev/null 2>/dev/null || echo "{}")
     fi
 
     if command -v jq >/dev/null 2>&1; then
@@ -327,7 +327,7 @@ stop_all_processes() {
 
     # 1. Try graceful stop via manager first
     if [[ -x "$MANAGER_BIN" ]]; then
-        $use_sudo "$MANAGER_BIN" stop >/dev/null 2>&1 || true
+        $use_sudo "$MANAGER_BIN" stop < /dev/null >/dev/null 2>&1 || true
         sleep 2
     fi
 
@@ -386,7 +386,7 @@ any_node_running() {
 # Helper: Check if current node consensus key already exists in validator set
 node_is_validator() {
     local result
-    if ! result=$("$MANAGER_BIN" register-validator --check-only --output json 2>/dev/null); then
+    if ! result=$("$MANAGER_BIN" register-validator --check-only --output json < /dev/null 2>/dev/null); then
         return 1
     fi
     if command -v jq >/dev/null 2>&1; then
@@ -573,9 +573,9 @@ install_go() {
     update_shell_profile "$install_dir/go"
 
     # Verify installation
-    if "$install_dir/go/bin/go" version >/dev/null 2>&1; then
+    if "$install_dir/go/bin/go" version < /dev/null >/dev/null 2>&1; then
         local installed_version
-        installed_version=$("$install_dir/go/bin/go" version | awk '{print $3}')
+        installed_version=$("$install_dir/go/bin/go" version < /dev/null | awk '{print $3}')
         ok "Go installed successfully: $installed_version"
         echo
         echo -e "${GREEN}Go has been installed to: $install_dir/go${NC}"
@@ -723,7 +723,7 @@ download_pchaind() {
         # Verify installation
         if [[ -x "$COSMOVISOR_GENESIS_BIN/pchaind" ]]; then
             local installed_version
-            installed_version=$("$COSMOVISOR_GENESIS_BIN/pchaind" version 2>&1 | head -1 || echo "")
+            installed_version=$("$COSMOVISOR_GENESIS_BIN/pchaind" version < /dev/null 2>&1 | head -1 || echo "")
             if [[ -n "$installed_version" ]]; then
                 ok "Installed pchaind ($installed_version)"
             else
@@ -860,7 +860,7 @@ download_push_validator() {
         # Verify installation
         if [[ -x "$MANAGER_BIN" ]]; then
             local installed_version
-            installed_version=$("$MANAGER_BIN" version 2>&1 | awk '{print $2}' || echo "")
+            installed_version=$("$MANAGER_BIN" version < /dev/null 2>&1 | awk '{print $2}' || echo "")
             if [[ -n "$installed_version" ]]; then
                 ok "Installed push-validator ($installed_version)"
             else
@@ -1109,7 +1109,7 @@ elif pgrep -f "pchaind.*start" >/dev/null 2>&1; then
   HAS_RUNNING_NODE="yes"
 elif [[ -x "$MANAGER_BIN" ]] && command -v "$MANAGER_BIN" >/dev/null 2>&1; then
   # Manager exists, check if node is actually running via status
-  STATUS_JSON=$("$MANAGER_BIN" status --output json 2>/dev/null || echo "{}")
+  STATUS_JSON=$("$MANAGER_BIN" status --output json < /dev/null 2>/dev/null || echo "{}")
   if echo "$STATUS_JSON" | grep -q '"running"[[:space:]]*:[[:space:]]*true'; then
     HAS_RUNNING_NODE="yes"
   fi
@@ -1167,7 +1167,7 @@ if ! command -v go >/dev/null 2>&1; then
   warn "Go is not installed"
 else
   # Validate Go version (requires 1.23+ for cosmovisor)
-  GO_VERSION=$(go version | awk '{print $3}' | sed 's/go//')
+  GO_VERSION=$(go version < /dev/null | awk '{print $3}' | sed 's/go//')
   GO_MAJOR=$(echo "$GO_VERSION" | cut -d. -f1)
   GO_MINOR=$(echo "$GO_VERSION" | cut -d. -f2)
 
@@ -1205,7 +1205,7 @@ if [[ $GO_NEEDS_INSTALL -eq 1 ]] || [[ $GO_NEEDS_UPGRADE -eq 1 ]]; then
 
       # Verify installation worked
       if command -v go >/dev/null 2>&1; then
-        GO_VERSION=$(go version | awk '{print $3}' | sed 's/go//')
+        GO_VERSION=$(go version < /dev/null | awk '{print $3}' | sed 's/go//')
         verbose "Go successfully installed: $GO_VERSION"
       else
         err "Go installation completed but 'go' command not found in PATH"
@@ -1236,7 +1236,7 @@ if [[ $GO_NEEDS_INSTALL -eq 1 ]] || [[ $GO_NEEDS_UPGRADE -eq 1 ]]; then
 
         # Verify installation worked
         if command -v go >/dev/null 2>&1; then
-          GO_VERSION=$(go version | awk '{print $3}' | sed 's/go//')
+          GO_VERSION=$(go version < /dev/null | awk '{print $3}' | sed 's/go//')
           verbose "Go successfully installed: $GO_VERSION"
         else
           err "Go installation completed but 'go' command not found in PATH"
@@ -1290,7 +1290,7 @@ fi
 # Store environment info (will print after manager is built)
 OS_NAME=$(uname -s | tr '[:upper:]' '[:lower:]')
 OS_ARCH=$(uname -m)
-GO_VER=$(go version | awk '{print $3}' | sed 's/go//')
+GO_VER=$(go version < /dev/null | awk '{print $3}' | sed 's/go//')
 TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
 
 # Calculate total phases needed (detection already done above before mkdir)
@@ -1353,7 +1353,7 @@ if [[ "$USE_LOCAL" = "yes" || -n "$LOCAL_REPO" ]]; then
   if [[ -x "$MANAGER_BIN" ]]; then
     CURRENT_COMMIT=$(cd "$REPO_DIR" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
     # Extract commit from version output (format: "push-validator vX.Y.Z (1f599bd) built ...")
-    INSTALLED_COMMIT=$("$MANAGER_BIN" version 2>/dev/null | sed -n 's/.*(\([0-9a-f]\{7,\}\)).*/\1/p')
+    INSTALLED_COMMIT=$("$MANAGER_BIN" version < /dev/null 2>/dev/null | sed -n 's/.*(\([0-9a-f]\{7,\}\)).*/\1/p')
     # Only skip build if both are valid hex commits and match
     if [[ "$CURRENT_COMMIT" =~ ^[0-9a-f]+$ ]] && [[ "$INSTALLED_COMMIT" =~ ^[0-9a-f]+$ ]] && [[ "$CURRENT_COMMIT" == "$INSTALLED_COMMIT" ]]; then
       step "Manager already up-to-date ($CURRENT_COMMIT) - skipped"
@@ -1408,7 +1408,7 @@ ok "Manager installed: $MANAGER_BIN"
 MANAGER_VER_BANNER="dev unknown"
 if [[ -x "$MANAGER_BIN" ]]; then
   # Parse full version output: "push-validator v1.0.0 (abc1234) built 2025-01-08"
-  MANAGER_FULL=$("$MANAGER_BIN" version 2>/dev/null || echo "unknown")
+  MANAGER_FULL=$("$MANAGER_BIN" version < /dev/null 2>/dev/null || echo "unknown")
   if [[ "$MANAGER_FULL" != "unknown" ]]; then
     MANAGER_VER_BANNER=$(echo "$MANAGER_FULL" | awk '{print $2, $3}' | sed 's/[()]//g')
   fi
@@ -1438,7 +1438,7 @@ if [[ "$PCHAIN_REF" =~ ^v[0-9] ]]; then
   VERSION_FLAG="--version $PCHAIN_REF"
 fi
 
-if ! "$MANAGER_BIN" chain install $VERSION_FLAG --home "$HOME_DIR"; then
+if ! "$MANAGER_BIN" chain install $VERSION_FLAG --home "$HOME_DIR" < /dev/null; then
   err "Failed to download pchaind binary"
   echo
   echo "Please check your internet connection and try again."
@@ -1454,7 +1454,7 @@ verbose "Using built-in WebSocket monitor (no external dependency)"
 # Install Cosmovisor for automatic upgrades (pinned to v1.7.1)
 step "Installing Cosmovisor for automatic upgrades"
 if ! command -v cosmovisor >/dev/null 2>&1; then
-  go install cosmossdk.io/tools/cosmovisor/cmd/cosmovisor@v1.7.1
+  go install cosmossdk.io/tools/cosmovisor/cmd/cosmovisor@v1.7.1 < /dev/null
   ok "Cosmovisor v1.7.1 installed"
 else
   ok "Cosmovisor already installed"
@@ -1469,7 +1469,7 @@ if [[ "$AUTO_START" = "yes" ]]; then
   step "Downloading blockchain snapshot (~6-7GB)"
   "$MANAGER_BIN" snapshot download \
     --home "$HOME_DIR" \
-    --snapshot-url "$SNAPSHOT_URL" || { err "snapshot download failed"; exit 1; }
+    --snapshot-url "$SNAPSHOT_URL" < /dev/null || { err "snapshot download failed"; exit 1; }
   ok "Snapshot cached"
 
   next_phase "Initializing Node"
@@ -1483,7 +1483,7 @@ if [[ "$AUTO_START" = "yes" ]]; then
       --genesis-domain "$GENESIS_DOMAIN" \
       --snapshot-url "$SNAPSHOT_URL" \
       --skip-snapshot \
-      --bin "${PCHAIND:-pchaind}" 2>&1 | indent_output || { err "init failed"; exit 1; }
+      --bin "${PCHAIND:-pchaind}" < /dev/null 2>&1 | indent_output || { err "init failed"; exit 1; }
     ok "Node initialized"
 
     # Optimize config for faster sync
@@ -1524,7 +1524,7 @@ if [[ "$AUTO_START" = "yes" ]]; then
   "$MANAGER_BIN" snapshot extract \
     --home "$HOME_DIR" \
     --target "$DATA_DIR" \
-    --force || { err "snapshot extract failed"; exit 1; }
+    --force < /dev/null || { err "snapshot extract failed"; exit 1; }
 
   # Mark snapshot as downloaded
   echo "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$SNAPSHOT_MARKER"
@@ -1542,12 +1542,12 @@ if [[ "$AUTO_START" = "yes" ]]; then
       step "Restarting node (attempt $((RETRY_COUNT + 1))/$((MAX_RETRIES + 1)))"
     fi
 
-    "$MANAGER_BIN" start --no-prompt --home "$HOME_DIR" --bin "${PCHAIND:-pchaind}" 2>&1 | indent_output || { err "start failed"; exit 1; }
+    "$MANAGER_BIN" start --no-prompt --home "$HOME_DIR" --bin "${PCHAIND:-pchaind}" < /dev/null 2>&1 | indent_output || { err "start failed"; exit 1; }
 
     step "Waiting for sync"
     # Stream compact sync until fully synced (monitor prints snapshot/block progress)
     set +e
-    "$MANAGER_BIN" sync --compact --window 30 --rpc "http://127.0.0.1:26657" --remote "https://$GENESIS_DOMAIN:443" --skip-final-message
+    "$MANAGER_BIN" sync --compact --window 30 --rpc "http://127.0.0.1:26657" --remote "https://$GENESIS_DOMAIN:443" --skip-final-message < /dev/null
     SYNC_RC=$?
     set -e
 
@@ -1582,7 +1582,7 @@ if [[ "$AUTO_START" = "yes" ]]; then
         echo "  • Discord: https://discord.com/invite/pushchain"
         echo "  • Support: https://push.org/support/"
         echo
-        "$MANAGER_BIN" stop >/dev/null 2>&1 || true
+        "$MANAGER_BIN" stop < /dev/null >/dev/null 2>&1 || true
         exit 1
       fi
 
@@ -1590,7 +1590,7 @@ if [[ "$AUTO_START" = "yes" ]]; then
       echo
 
       step "Stopping node"
-      "$MANAGER_BIN" stop >/dev/null 2>&1 || true
+      "$MANAGER_BIN" stop < /dev/null >/dev/null 2>&1 || true
       sleep 2
       pkill -x pchaind 2>/dev/null || true
       pkill -x push-validator 2>/dev/null || true
@@ -1600,7 +1600,7 @@ if [[ "$AUTO_START" = "yes" ]]; then
     fi
 
     warn "Sync monitoring ended with code $SYNC_RC (not a stuck condition, skipping retry)"
-    "$MANAGER_BIN" stop >/dev/null 2>&1 || true
+    "$MANAGER_BIN" stop < /dev/null >/dev/null 2>&1 || true
     break
   done
 
@@ -1676,11 +1676,11 @@ INSTALL_END_TIME=$(date +%s)
 TOTAL_TIME=$((INSTALL_END_TIME - ${INSTALL_START_TIME:-$INSTALL_END_TIME}))
 
 # Get node information for unified summary
-MANAGER_VER=$("$MANAGER_BIN" version 2>/dev/null | awk '{print $2}' || echo "unknown")
+MANAGER_VER=$("$MANAGER_BIN" version < /dev/null 2>/dev/null | awk '{print $2}' || echo "unknown")
 PCHAIND_PATH="${PCHAIND:-pchaind}"
 # Extract pchaind version if binary exists
 if command -v "$PCHAIND_PATH" >/dev/null 2>&1; then
-  CHAIN_VER=$("$PCHAIND_PATH" version 2>/dev/null | head -1 || echo "")
+  CHAIN_VER=$("$PCHAIND_PATH" version < /dev/null 2>/dev/null | head -1 || echo "")
   if [[ -n "$CHAIN_VER" ]]; then
     PCHAIND_VER="$PCHAIND_PATH ($CHAIN_VER)"
   else
@@ -1694,9 +1694,9 @@ RPC_URL="http://127.0.0.1:26657"
 # Try to get Node status info
 TO_CMD=$(timeout_cmd)
 if [[ -n "$TO_CMD" ]]; then
-  STATUS_JSON=$($TO_CMD 5 "$MANAGER_BIN" status --output json 2>/dev/null || echo "{}")
+  STATUS_JSON=$($TO_CMD 5 "$MANAGER_BIN" status --output json < /dev/null 2>/dev/null || echo "{}")
 else
-  STATUS_JSON=$("$MANAGER_BIN" status --output json 2>/dev/null || echo "{}")
+  STATUS_JSON=$("$MANAGER_BIN" status --output json < /dev/null 2>/dev/null || echo "{}")
 fi
 if command -v jq >/dev/null 2>&1; then
   NETWORK=$(echo "$STATUS_JSON" | jq -r '.network // .node.network // empty' 2>/dev/null)

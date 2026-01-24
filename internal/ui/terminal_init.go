@@ -48,8 +48,16 @@ func InitTerminal() {
 // FlushStdinWithTimeout reads and discards stdin for the specified duration.
 // This catches asynchronous terminal responses (cursor position reports,
 // OSC responses, focus events) that arrive after queries are sent.
+// Only flushes if stdin is a terminal — never reads from pipes or /dev/null
+// to avoid consuming piped script content (e.g., curl | bash).
 func FlushStdinWithTimeout(timeout time.Duration) {
 	fd := int(os.Stdin.Fd())
+
+	// Never read from stdin if it's not a terminal — this would consume
+	// piped input (e.g., the install script when run via "curl | bash")
+	if !term.IsTerminal(fd) {
+		return
+	}
 
 	// Set non-blocking mode to read without waiting
 	if err := syscall.SetNonblock(fd, true); err != nil {

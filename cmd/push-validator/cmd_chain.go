@@ -167,6 +167,7 @@ Examples:
 
 			verifyBinary := func(path string) (string, error) {
 				verCmd := exec.Command(path, "version")
+				verCmd.Stdin = nil
 				out, err := verCmd.Output()
 				if err != nil {
 					return "", err
