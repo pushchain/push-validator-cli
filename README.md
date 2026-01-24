@@ -22,6 +22,16 @@ Wait for: `✅ Catching Up: false` (snapshot download takes ~15-30 mins dependin
 ```bash
 push-validator register-validator
 ```
+
+**Wallet Setup:** You'll be prompted to either:
+1. **Create new wallet** — Generates a new recovery phrase (save it securely!)
+2. **Import existing wallet** — Use your existing 12/24-word recovery phrase
+
+**Configuration:** You'll also set:
+- **Moniker** — Your validator's display name (must be unique on the network)
+- **Commission Rate** — Fee charged to delegators (5-100%, default: 10%)
+- **Stake Amount** — How much to stake (minimum: 1.5 PC)
+
 **Requirements:** 2+ PC tokens from [faucet](https://faucet.push.org)
 
 **Done! Your validator is running with automatic recovery enabled! 🎉**
@@ -79,7 +89,7 @@ push-validator start                # Start node with snapshot sync
 push-validator stop                 # Stop node
 push-validator status               # Check sync & validator status
 push-validator dashboard            # Live interactive monitoring dashboard
-push-validator register-validator   # Register as validator
+push-validator register-validator   # Register as validator (create or import wallet)
 push-validator logs                 # View logs
 ```
 

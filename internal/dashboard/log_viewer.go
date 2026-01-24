@@ -12,6 +12,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // LogViewer component displays and tails log file with scrolling and search
@@ -142,8 +143,8 @@ func (lv *LogViewer) MinWidth() int {
 
 // MinHeight returns minimum height
 func (lv *LogViewer) MinHeight() int {
-	// Fixed 8 lines + title (1) + footer (1) + border padding (2) + spacing (1) = 13
-	return 13
+	// Minimum: 3 log lines + title (1) + footer (1) + border (2) = 7
+	return 7
 }
 
 // Update receives messages
@@ -253,16 +254,19 @@ func (lv *LogViewer) View(w, h int) string {
 		h = 0
 	}
 
-	// Account for border
-	borderWidth := 2
-	contentWidth := w - borderWidth
+	// Account for border (left + right = 2)
+	contentWidth := w - 2
 	if contentWidth < 0 {
 		contentWidth = 0
 	}
 
-	// Don't use MaxHeight - let border render fully
-	// The layout system already allocates the right amount of space
-	rendered := style.Width(contentWidth).Render(content)
+	// Set fixed height to prevent content overflow causing flicker
+	contentHeight := h - 2 // subtract border top + bottom
+	if contentHeight < 0 {
+		contentHeight = 0
+	}
+
+	rendered := style.Width(contentWidth).Height(contentHeight).Render(content)
 	lv.UpdateCache(rendered)
 	return rendered
 }
@@ -300,10 +304,11 @@ func (lv *LogViewer) renderContent(w, h int) string {
 		filteredLines = allLines
 	}
 
-	// Fixed 8-line display for stable log viewing
-	// This prevents the display from constantly adjusting as logs stream in
-	const fixedLogLines = 8
-	availableLines := fixedLogLines
+	// Dynamic line count: use allocated height minus border (2), title (1), footer (1)
+	availableLines := h - 4
+	if availableLines < 3 {
+		availableLines = 3
+	}
 
 	// Apply scroll position
 	totalLines := len(filteredLines)
@@ -341,6 +346,11 @@ func (lv *LogViewer) renderContent(w, h int) string {
 		styledLines = append(styledLines, styledLine)
 	}
 
+	// Pad to exact line count for stable widget height
+	for len(styledLines) < availableLines {
+		styledLines = append(styledLines, "")
+	}
+
 	content := strings.Join(styledLines, "\n")
 
 	// Add footer hint
@@ -349,12 +359,12 @@ func (lv *LogViewer) renderContent(w, h int) string {
 	return fmt.Sprintf("%s\n%s\n%s", title, content, footer)
 }
 
-// styleLogLine applies color coding based on log level
+// styleLogLine applies color coding based on log level and truncates to maxWidth
 func (lv *LogViewer) styleLogLine(line string, maxWidth int) string {
-	// Don't truncate - let terminal handle line wrapping
-	// This allows users to see full log messages
-
 	if lv.noEmoji {
+		if maxWidth > 0 {
+			return ansi.Truncate(line, maxWidth, "…")
+		}
 		return line
 	}
 
@@ -373,11 +383,19 @@ func (lv *LogViewer) styleLogLine(line string, maxWidth int) string {
 	} else if strings.Contains(lowerLine, "debug") || strings.Contains(lowerLine, "trace") || strings.Contains(lowerLine, " dbg ") {
 		style = lipgloss.NewStyle().Foreground(lipgloss.Color("240")) // Gray
 	} else {
-		// Default color
+		// Default - no color, just truncate
+		if maxWidth > 0 {
+			return ansi.Truncate(line, maxWidth, "…")
+		}
 		return line
 	}
 
-	return style.Render(line)
+	// Apply color then truncate (ansi.Truncate is ANSI and cell-width aware)
+	styled := style.Render(line)
+	if maxWidth > 0 {
+		return ansi.Truncate(styled, maxWidth, "…")
+	}
+	return styled
 }
 
 // renderFooter shows control hints
