@@ -1454,8 +1454,33 @@ verbose "Using built-in WebSocket monitor (no external dependency)"
 # Install Cosmovisor for automatic upgrades (pinned to v1.7.1)
 step "Installing Cosmovisor for automatic upgrades"
 if ! command -v cosmovisor >/dev/null 2>&1; then
-  go install cosmossdk.io/tools/cosmovisor/cmd/cosmovisor@v1.7.1 < /dev/null
-  ok "Cosmovisor v1.7.1 installed"
+  COSMOVISOR_LOG=$(mktemp /tmp/cosmovisor-install-XXXXXX.log)
+  go install cosmossdk.io/tools/cosmovisor/cmd/cosmovisor@v1.7.1 < /dev/null > "$COSMOVISOR_LOG" 2>&1 &
+  GO_PID=$!
+  # Show spinner while go install runs
+  if [[ -t 1 ]]; then
+    spin_chars='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+    i=0
+    while kill -0 "$GO_PID" 2>/dev/null; do
+      printf "\r  %s Building cosmovisor from source..." "${spin_chars:i++%${#spin_chars}:1}"
+      sleep 0.1 2>/dev/null || sleep 1
+    done
+    printf "\r\033[K"
+  else
+    # Non-TTY: just wait silently
+    wait "$GO_PID"
+  fi
+  wait "$GO_PID" 2>/dev/null
+  GO_EXIT=$?
+  if [[ $GO_EXIT -eq 0 ]]; then
+    rm -f "$COSMOVISOR_LOG"
+    # Ensure go bin directory is in PATH for current session
+    export PATH="${GOBIN:-${GOPATH:-$HOME/go}/bin}:$PATH"
+    ok "Cosmovisor v1.7.1 installed"
+  else
+    err "Cosmovisor installation failed (see $COSMOVISOR_LOG)"
+    exit 1
+  fi
 else
   ok "Cosmovisor already installed"
 fi
