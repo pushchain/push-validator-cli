@@ -151,9 +151,10 @@ func runDashboardInteractive(opts dashboard.Options) error {
 		return fmt.Errorf("dashboard error: %w", err)
 	}
 
-	// Flush stale terminal responses (cursor position reports, focus events)
-	// that arrive after bubbletea exits the alternate screen
-	ui.FlushStdinWithTimeout(50 * time.Millisecond)
+	// Clean up terminal state and flush any pending async responses
+	// This prevents escape sequences (CPR, OSC responses, focus events)
+	// from appearing in the output after the dashboard closes
+	ui.ResetTerminalAfterTUI()
 
 	return nil
 }

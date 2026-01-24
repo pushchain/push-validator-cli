@@ -41,8 +41,43 @@ func InitTerminal() {
 		// Small delay to allow any pending responses to arrive
 		time.Sleep(20 * time.Millisecond)
 		// Flush any pending terminal responses from stdin
-		FlushStdinWithTimeout(50 * time.Millisecond)
+		// Increased timeout to 150ms to catch slower terminals
+		FlushStdinWithTimeout(150 * time.Millisecond)
 	}
+}
+
+// ResetTerminalAfterTUI cleans up terminal state after a TUI (like bubbletea) exits.
+// This prevents escape sequences from asynchronous terminal responses (cursor position
+// reports, OSC responses) from appearing in the output after the TUI closes.
+//
+// Should be called after any bubbletea program exits, especially when using alternate screen.
+func ResetTerminalAfterTUI() {
+	if !term.IsTerminal(int(os.Stdout.Fd())) {
+		return
+	}
+
+	// 1. Disable terminal query modes that may have been enabled
+	// These prevent the terminal from sending unsolicited responses
+	fmt.Fprint(os.Stdout, "\033[?1004l")  // Disable focus reporting
+	fmt.Fprint(os.Stdout, "\033[?1003l")  // Disable all mouse tracking
+	fmt.Fprint(os.Stdout, "\033[?1000l")  // Disable X10 mouse tracking
+	fmt.Fprint(os.Stdout, "\033[?1006l")  // Disable SGR mouse mode
+	fmt.Fprint(os.Stdout, "\033[?25h")    // Show cursor (ensure it's visible)
+
+	// 2. Send a carriage return to ensure we're at the start of a line
+	// This prevents partial escape sequences from appearing mid-line
+	fmt.Fprint(os.Stdout, "\r")
+
+	// 3. Allow time for terminal to process the reset commands
+	time.Sleep(30 * time.Millisecond)
+
+	// 4. Flush stdin to catch any async responses that arrived during/after TUI exit
+	// Use a longer timeout (150ms) to catch delayed responses from slow terminals
+	// Common delayed responses:
+	//   - Cursor position reports (CPR): ^[[row;colR
+	//   - OSC responses: ^[]11;rgb:xxxx/xxxx/xxxx^[\
+	//   - Focus events: ^[[I or ^[[O
+	FlushStdinWithTimeout(150 * time.Millisecond)
 }
 
 // FlushStdinWithTimeout reads and discards stdin for the specified duration.
