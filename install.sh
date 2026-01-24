@@ -314,26 +314,38 @@ node_running() {
 # Helper: Stop all running node processes with verification
 stop_all_processes() {
     local timeout="${1:-15}"
+    local use_sudo=""
 
     step "Stopping any running node processes..."
 
+    # Determine if we need sudo (processes may be owned by root)
+    if [[ $(id -u) -ne 0 ]]; then
+        if pgrep -f "pchaind|cosmovisor|push-validator" >/dev/null 2>&1; then
+            use_sudo="sudo"
+        fi
+    fi
+
     # 1. Try graceful stop via manager first
     if [[ -x "$MANAGER_BIN" ]]; then
-        "$MANAGER_BIN" stop >/dev/null 2>&1 || true
+        $use_sudo "$MANAGER_BIN" stop >/dev/null 2>&1 || true
         sleep 2
     fi
 
-    # 2. Kill cosmovisor processes
-    pkill -f "cosmovisor.*run" 2>/dev/null || true
+    # 2. Kill push-validator processes (logs, etc.)
+    $use_sudo pkill -f "push-validator" 2>/dev/null || true
 
-    # 3. Kill pchaind processes
-    pkill -f "pchaind.*start" 2>/dev/null || true
+    # 3. Kill cosmovisor processes
+    $use_sudo pkill -f "cosmovisor.*run" 2>/dev/null || true
 
-    # 4. Wait and verify all processes stopped
+    # 4. Kill pchaind processes
+    $use_sudo pkill -f "pchaind.*start" 2>/dev/null || true
+
+    # 5. Wait and verify all processes stopped
     local elapsed=0
     while [[ $elapsed -lt $timeout ]]; do
         if ! pgrep -f "cosmovisor.*run" >/dev/null 2>&1 && \
-           ! pgrep -f "pchaind.*start" >/dev/null 2>&1; then
+           ! pgrep -f "pchaind.*start" >/dev/null 2>&1 && \
+           ! pgrep -f "push-validator" >/dev/null 2>&1; then
             ok "All processes stopped"
             return 0
         fi
@@ -341,13 +353,14 @@ stop_all_processes() {
         ((elapsed++))
     done
 
-    # 5. Force kill if still running
+    # 6. Force kill if still running
     verbose "Processes still running, force killing..."
-    pkill -9 -f "cosmovisor.*run" 2>/dev/null || true
-    pkill -9 -f "pchaind.*start" 2>/dev/null || true
+    $use_sudo pkill -9 -f "push-validator" 2>/dev/null || true
+    $use_sudo pkill -9 -f "cosmovisor.*run" 2>/dev/null || true
+    $use_sudo pkill -9 -f "pchaind.*start" 2>/dev/null || true
     sleep 1
 
-    # 6. Final check
+    # 7. Final check
     if pgrep -f "cosmovisor.*run" >/dev/null 2>&1 || \
        pgrep -f "pchaind.*start" >/dev/null 2>&1; then
         err "Failed to stop all processes"
@@ -358,10 +371,11 @@ stop_all_processes() {
     return 0
 }
 
-# Helper: Check if any node processes are running (cosmovisor or pchaind)
+# Helper: Check if any node processes are running (cosmovisor, pchaind, or push-validator)
 any_node_running() {
     pgrep -f "cosmovisor.*run" >/dev/null 2>&1 && return 0
     pgrep -f "pchaind.*start" >/dev/null 2>&1 && return 0
+    pgrep -f "push-validator" >/dev/null 2>&1 && return 0
     # Also check via manager status if available
     if [[ -x "$MANAGER_BIN" ]]; then
         node_running && return 0
