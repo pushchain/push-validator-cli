@@ -16,7 +16,7 @@ Automatically installs and starts your validator using snapshot download (no ful
 ```bash
 push-validator status
 ```
-Wait for: `✅ Catching Up: false` (snapshot download takes ~15-30 mins depending on connection, then block sync begins)
+Wait for: `✅ Catching Up: false` (snapshot download takes ~5-20 mins depending on connection, then block sync begins)
 
 ### Step 3: Register Validator
 ```bash
@@ -35,33 +35,6 @@ push-validator register-validator
 **Requirements:** 2+ PC tokens from [faucet](https://faucet.push.org)
 
 **Done! Your validator is running with automatic recovery enabled! 🎉**
-
-## ⚠️ Temporary: RPC URL Configuration
-
-> **Note:** This is a temporary requirement that will be removed in the next 2-3 weeks.
-
-The validator currently requires external RPC URLs for cross-chain communication. To ensure seamless validator operation without chain halts, please configure the following:
-
-### Setup Instructions
-
-1. Create a `.env` file in your home directory (`~/`, where `~/.pchain` is also located):
-   ```bash
-   touch ~/.env
-   ```
-
-2. Add the following RPC URL configurations to the `.env` file:
-   ```bash
-   # Solana RPC
-   RPC_URL_SOLANA_ETWTRABZAYQ6IMFEYKOURU166VU2XQA1=<your-solana-rpc-url>
-
-   # EVM Chain RPCs
-   RPC_URL_EIP155_11155111=<your-sepolia-rpc-url>      # Ethereum Sepolia
-   RPC_URL_EIP155_421614=<your-arbitrum-sepolia-url>   # Arbitrum Sepolia
-   RPC_URL_EIP155_84532=<your-base-sepolia-url>        # Base Sepolia
-   RPC_URL_EIP155_97=<your-bsc-testnet-url>            # BSC Testnet
-   ```
-
-> **Recommended:** Use reliable paid RPC providers (e.g., Alchemy, Infura, QuickNode) for optimal performance and uptime.
 
 ## 📊 Dashboard
 
@@ -121,7 +94,7 @@ push-validator update          # Update CLI to latest version
 
 ## ⚡ Features
 
-- **Snapshot Download**: Fast sync (~15-30 mins, no full blockchain download required)
+- **Snapshot Download**: Fast sync (~5-20 mins, no full blockchain download required)
 - **Interactive Logs**: Real-time log viewer with search and filtering
 - **Smart Detection**: Monitors for sync stalls and network issues
 - **Reliable Snapshots**: Uses trusted RPC nodes for recovery
