@@ -58,12 +58,29 @@ func findCosmovisor() string {
 		}
 	}
 
-	// Fall back to PATH lookup
-	path, err := exec.LookPath("cosmovisor")
-	if err != nil {
-		return ""
+	// Check PATH lookup
+	if path, err := exec.LookPath("cosmovisor"); err == nil {
+		return path
 	}
-	return path
+
+	// Check common Go binary locations (go install puts binaries here)
+	candidates := []string{}
+	if gobin := os.Getenv("GOBIN"); gobin != "" {
+		candidates = append(candidates, filepath.Join(gobin, "cosmovisor"))
+	}
+	if gopath := os.Getenv("GOPATH"); gopath != "" {
+		candidates = append(candidates, filepath.Join(gopath, "bin", "cosmovisor"))
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		candidates = append(candidates, filepath.Join(home, "go", "bin", "cosmovisor"))
+	}
+	for _, c := range candidates {
+		if _, err := os.Stat(c); err == nil {
+			return c
+		}
+	}
+
+	return ""
 }
 
 // IsAvailable returns true if cosmovisor binary is found.

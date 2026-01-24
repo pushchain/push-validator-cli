@@ -12,6 +12,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/pushchain/push-validator-cli/internal/dashboard"
+	"github.com/pushchain/push-validator-cli/internal/ui"
 )
 
 // dashboardFlags holds the parsed flag values for the dashboard command.
@@ -149,6 +150,10 @@ func runDashboardInteractive(opts dashboard.Options) error {
 		}
 		return fmt.Errorf("dashboard error: %w", err)
 	}
+
+	// Flush stale terminal responses (cursor position reports, focus events)
+	// that arrive after bubbletea exits the alternate screen
+	ui.FlushStdinWithTimeout(50 * time.Millisecond)
 
 	return nil
 }

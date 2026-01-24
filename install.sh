@@ -1474,8 +1474,17 @@ if ! command -v cosmovisor >/dev/null 2>&1; then
   GO_EXIT=$?
   if [[ $GO_EXIT -eq 0 ]]; then
     rm -f "$COSMOVISOR_LOG"
-    # Ensure go bin directory is in PATH for current session
-    export PATH="${GOBIN:-${GOPATH:-$HOME/go}/bin}:$PATH"
+    # Ensure go bin directory is in PATH for current session and future shells
+    GO_BIN_DIR="${GOBIN:-${GOPATH:-$HOME/go}/bin}"
+    export PATH="$GO_BIN_DIR:$PATH"
+    # Persist to shell profile if not already there
+    SHELL_CONFIG="${HOME}/.bashrc"
+    [[ "${SHELL##*/}" = "zsh" ]] && SHELL_CONFIG="${HOME}/.zshrc"
+    if ! grep -q "$GO_BIN_DIR" "$SHELL_CONFIG" 2>/dev/null; then
+      echo "" >> "$SHELL_CONFIG"
+      echo "# Go bin directory (cosmovisor)" >> "$SHELL_CONFIG"
+      echo "export PATH=\"$GO_BIN_DIR:\$PATH\"" >> "$SHELL_CONFIG"
+    fi
     ok "Cosmovisor v1.7.1 installed"
   else
     err "Cosmovisor installation failed (see $COSMOVISOR_LOG)"
