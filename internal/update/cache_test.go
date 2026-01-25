@@ -111,6 +111,7 @@ func TestLoadCache_InvalidJSON(t *testing.T) {
 }
 
 func TestIsCacheValid(t *testing.T) {
+	// Note: cacheDuration is 10 minutes
 	tests := []struct {
 		name      string
 		checkedAt time.Time
@@ -122,28 +123,28 @@ func TestIsCacheValid(t *testing.T) {
 			want:      true,
 		},
 		{
-			name:      "fresh cache - 1 hour ago",
+			name:      "fresh cache - 5 minutes ago",
+			checkedAt: time.Now().Add(-5 * time.Minute),
+			want:      true,
+		},
+		{
+			name:      "fresh cache - 9 minutes ago",
+			checkedAt: time.Now().Add(-9 * time.Minute),
+			want:      true,
+		},
+		{
+			name:      "stale cache - 11 minutes ago",
+			checkedAt: time.Now().Add(-11 * time.Minute),
+			want:      false,
+		},
+		{
+			name:      "stale cache - 1 hour ago",
 			checkedAt: time.Now().Add(-1 * time.Hour),
-			want:      true,
-		},
-		{
-			name:      "fresh cache - 23 hours ago",
-			checkedAt: time.Now().Add(-23 * time.Hour),
-			want:      true,
-		},
-		{
-			name:      "stale cache - 25 hours ago",
-			checkedAt: time.Now().Add(-25 * time.Hour),
 			want:      false,
 		},
 		{
-			name:      "stale cache - 48 hours ago",
-			checkedAt: time.Now().Add(-48 * time.Hour),
-			want:      false,
-		},
-		{
-			name:      "stale cache - 7 days ago",
-			checkedAt: time.Now().Add(-7 * 24 * time.Hour),
+			name:      "stale cache - 24 hours ago",
+			checkedAt: time.Now().Add(-24 * time.Hour),
 			want:      false,
 		},
 	}

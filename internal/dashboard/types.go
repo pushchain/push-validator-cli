@@ -7,6 +7,7 @@ import (
 	"github.com/pushchain/push-validator-cli/internal/config"
 	"github.com/pushchain/push-validator-cli/internal/metrics"
 	"github.com/pushchain/push-validator-cli/internal/process"
+	"github.com/pushchain/push-validator-cli/internal/update"
 )
 
 // Message types for Bubble Tea event loop - ensures deterministic control flow
@@ -33,6 +34,11 @@ type forceRefreshMsg struct{}
 
 // toggleHelpMsg is sent when user presses '?' to toggle help overlay
 type toggleHelpMsg struct{}
+
+// updateCheckResultMsg is sent when the startup update check completes
+type updateCheckResultMsg struct {
+	result *update.CheckResult
+}
 
 // DashboardData aggregates all data shown in the dashboard
 type DashboardData struct {

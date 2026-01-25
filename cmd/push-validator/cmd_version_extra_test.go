@@ -21,7 +21,7 @@ func (m *mockUpdateChecker) Check() (*update.CheckResult, error) {
 func TestCheckForUpdateWith_CacheValid_UpdateAvailable(t *testing.T) {
 	loadCache := func(homeDir string) (*update.CacheEntry, error) {
 		return &update.CacheEntry{
-			CheckedAt:       time.Now().Add(-1 * time.Hour),
+			CheckedAt:       time.Now().Add(-5 * time.Minute), // Within 10-minute cache TTL
 			LatestVersion:   "2.0.0",
 			UpdateAvailable: true,
 		}, nil
@@ -47,7 +47,7 @@ func TestCheckForUpdateWith_CacheValid_UpdateAvailable(t *testing.T) {
 func TestCheckForUpdateWith_CacheValid_NoUpdate(t *testing.T) {
 	loadCache := func(homeDir string) (*update.CacheEntry, error) {
 		return &update.CacheEntry{
-			CheckedAt:       time.Now().Add(-1 * time.Hour),
+			CheckedAt:       time.Now().Add(-5 * time.Minute), // Within 10-minute cache TTL
 			LatestVersion:   "1.0.0",
 			UpdateAvailable: false,
 		}, nil
@@ -153,7 +153,7 @@ func TestCheckForUpdateWith_CacheValid_SameVersion(t *testing.T) {
 	// Cache says update available but we're now on the latest version
 	loadCache := func(homeDir string) (*update.CacheEntry, error) {
 		return &update.CacheEntry{
-			CheckedAt:       time.Now().Add(-1 * time.Hour),
+			CheckedAt:       time.Now().Add(-5 * time.Minute), // Within 10-minute cache TTL
 			LatestVersion:   "1.0.0",
 			UpdateAvailable: true,
 		}, nil

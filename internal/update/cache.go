@@ -55,3 +55,27 @@ func SaveCache(homeDir string, entry *CacheEntry) error {
 func IsCacheValid(entry *CacheEntry) bool {
 	return time.Since(entry.CheckedAt) < cacheDuration
 }
+
+// ForceCheck performs a fresh update check, ignoring cache.
+// Used by status and dashboard commands for immediate notification.
+// Updates the cache after checking.
+func ForceCheck(homeDir, currentVersion string) (*CheckResult, error) {
+	updater, err := New(currentVersion)
+	if err != nil {
+		return nil, err
+	}
+
+	result, err := updater.Check()
+	if err != nil {
+		return nil, err
+	}
+
+	// Update cache with fresh result
+	_ = SaveCache(homeDir, &CacheEntry{
+		CheckedAt:       time.Now(),
+		LatestVersion:   result.LatestVersion,
+		UpdateAvailable: result.UpdateAvailable,
+	})
+
+	return result, nil
+}

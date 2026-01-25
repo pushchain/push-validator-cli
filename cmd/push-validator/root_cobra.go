@@ -58,7 +58,13 @@ var rootCmd = &cobra.Command{
 		// Start background update check (non-blocking)
 		// Skip for installation-related commands where notifications are disruptive
 		if !shouldSkipUpdateCheck(cmd) {
-			go checkForUpdateBackground()
+			// Use fresh check (bypass cache) for status/dashboard commands
+			// to ensure immediate notification of new versions
+			if shouldForceFreshUpdateCheck(cmd) {
+				go checkForUpdateFresh()
+			} else {
+				go checkForUpdateBackground()
+			}
 		}
 	},
 	PersistentPostRun: func(cmd *cobra.Command, args []string) {

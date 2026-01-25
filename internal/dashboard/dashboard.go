@@ -201,8 +201,21 @@ func (m *Dashboard) Init() tea.Cmd {
 	return tea.Batch(
 		m.spinner.Tick,
 		m.fetchCmd(),
+		m.updateCheckCmd(), // Fresh update check on startup
 		tickCmd(m.opts.RefreshInterval),
 	)
+}
+
+// updateCheckCmd performs a fresh update check on dashboard startup.
+// This bypasses the cache to ensure immediate notification of new versions.
+func (m *Dashboard) updateCheckCmd() tea.Cmd {
+	return func() tea.Msg {
+		result, err := update.ForceCheck(m.opts.Config.HomeDir, m.opts.CLIVersion)
+		if err != nil {
+			return updateCheckResultMsg{result: nil}
+		}
+		return updateCheckResultMsg{result: result}
+	}
 }
 
 // Update handles messages (Bubble Tea lifecycle)
@@ -274,6 +287,14 @@ func (m *Dashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
 		return m, cmd
+
+	case updateCheckResultMsg:
+		// Fresh update check completed on startup
+		if msg.result != nil && msg.result.UpdateAvailable {
+			m.data.UpdateInfo.Available = true
+			m.data.UpdateInfo.LatestVersion = msg.result.LatestVersion
+		}
+		return m, nil
 	}
 
 	return m, nil

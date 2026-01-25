@@ -71,7 +71,7 @@ type updateChecker interface {
 }
 
 // checkForUpdateBackground performs a non-blocking update check.
-// Uses cache to avoid checking more than once per 24 hours.
+// Uses cache to avoid checking more than once per 10 minutes.
 // Stores result in updateCheckResult global for use by PersistentPostRun.
 func checkForUpdateBackground() {
 	cfg := loadCfg()
@@ -79,6 +79,21 @@ func checkForUpdateBackground() {
 		return update.New(version)
 	})
 	if result != nil {
+		updateCheckMu.Lock()
+		updateCheckResult = result
+		updateCheckMu.Unlock()
+	}
+}
+
+// checkForUpdateFresh performs a fresh update check, bypassing cache.
+// Used by status and dashboard commands for immediate notification.
+func checkForUpdateFresh() {
+	cfg := loadCfg()
+	result, err := update.ForceCheck(cfg.HomeDir, Version)
+	if err != nil {
+		return // Silently fail
+	}
+	if result != nil && result.UpdateAvailable {
 		updateCheckMu.Lock()
 		updateCheckResult = result
 		updateCheckMu.Unlock()
@@ -175,4 +190,11 @@ func shouldSkipUpdateCheck(cmd *cobra.Command) bool {
 		return true
 	}
 	return false
+}
+
+// shouldForceFreshUpdateCheck returns true for commands that need immediate update notification.
+// These commands bypass the cache and always make a fresh network call to GitHub.
+func shouldForceFreshUpdateCheck(cmd *cobra.Command) bool {
+	cmdName := cmd.Name()
+	return cmdName == "status" || cmdName == "dashboard"
 }
