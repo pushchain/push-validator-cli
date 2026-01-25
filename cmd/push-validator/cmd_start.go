@@ -17,6 +17,7 @@ import (
 	"github.com/pushchain/push-validator-cli/internal/cosmovisor"
 	"github.com/pushchain/push-validator-cli/internal/dashboard"
 	"github.com/pushchain/push-validator-cli/internal/metrics"
+	"github.com/pushchain/push-validator-cli/internal/node"
 	"github.com/pushchain/push-validator-cli/internal/process"
 	"github.com/pushchain/push-validator-cli/internal/snapshot"
 	syncmon "github.com/pushchain/push-validator-cli/internal/sync"
@@ -142,6 +143,25 @@ var startCmd = &cobra.Command{
 		if flagOutput != "json" && !detection.SetupComplete {
 			p.Info("Initializing Cosmovisor...")
 		}
+
+		// Auto-refresh peers from remote RPC before starting
+		if remoteURL := cfg.RemoteRPCURL(); remoteURL != "" {
+			if flagOutput != "json" {
+				fmt.Println("→ Refreshing peers from network...")
+			}
+			refreshCtx, refreshCancel := context.WithTimeout(cmd.Context(), 15*time.Second)
+			peerCount, err := node.RefreshPeersFromRemote(refreshCtx, remoteURL, cfg.HomeDir, 10)
+			refreshCancel()
+			if err != nil {
+				if flagOutput != "json" {
+					fmt.Printf("  ⚠ Could not refresh peers: %v\n", err)
+					fmt.Println("  Continuing with existing peers...")
+				}
+			} else if flagOutput != "json" {
+				fmt.Printf("  ✓ Updated with %d peers\n", peerCount)
+			}
+		}
+
 		sup := newSupervisor(cfg.HomeDir)
 
 		// Check if node is already running
@@ -185,6 +205,14 @@ var startCmd = &cobra.Command{
 		} else {
 			if !isAlreadyRunning {
 				p.Success("Node started with Cosmovisor")
+			}
+
+			// Install peer refresh cron job (silent, idempotent)
+			if err := node.InstallPeerRefreshCron(cfg.HomeDir); err != nil {
+				// Non-fatal - just log if verbose
+				if flagVerbose {
+					fmt.Printf("  [DEBUG] Could not install peer refresh cron: %v\n", err)
+				}
 			}
 
 			// Check validator status and show appropriate next steps (skip if --no-prompt)

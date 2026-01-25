@@ -53,6 +53,8 @@ func (s *CosmovisorSupervisor) PID() (int, bool) {
 	if processAlive(pid) {
 		return pid, true
 	}
+	// Process is dead - clean up stale PID file
+	_ = os.Remove(s.pidFile)
 	return 0, false
 }
 
