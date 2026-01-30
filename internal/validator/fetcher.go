@@ -2,6 +2,7 @@ package validator
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -12,8 +13,31 @@ import (
 	"sync"
 	"time"
 
+	"github.com/btcsuite/btcutil/bech32"
 	"github.com/pushchain/push-validator-cli/internal/config"
 )
+
+// Bech32ToHex converts a bech32 address (push1..., pushvaloper1...) to EVM hex format (0x...)
+// This is a pure Go implementation that doesn't require subprocess calls.
+func Bech32ToHex(addr string) string {
+	if addr == "" {
+		return "—"
+	}
+
+	// Decode bech32 address
+	_, data, err := bech32.Decode(addr)
+	if err != nil {
+		return "—"
+	}
+
+	// Convert 5-bit groups to 8-bit bytes
+	converted, err := bech32.ConvertBits(data, 5, 8, false)
+	if err != nil {
+		return "—"
+	}
+
+	return "0x" + strings.ToUpper(hex.EncodeToString(converted))
+}
 
 // commandContext creates an exec.CommandContext with DYLD_LIBRARY_PATH set for macOS
 // to find libwasmvm.dylib in the same directory as the binary
@@ -550,6 +574,7 @@ func parseStatus(status string) string {
 }
 
 // GetValidatorRewards fetches commission and outstanding rewards for a validator
+// Both queries are executed in parallel for better performance.
 func GetValidatorRewards(ctx context.Context, cfg config.Config, validatorAddr string) (commission string, outstanding string, err error) {
 	if validatorAddr == "" {
 		return "—", "—", fmt.Errorf("validator address required")
@@ -560,73 +585,64 @@ func GetValidatorRewards(ctx context.Context, cfg config.Config, validatorAddr s
 		return "—", "—", fmt.Errorf("pchaind not found: %w", err)
 	}
 
-	// Create child context with 15s timeout per validator to avoid deadline issues
-	// when fetching rewards for multiple validators in parallel
-	// Increased from 5s to handle network latency and slower nodes
-	queryCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
+	// Use the provided context or create one with timeout
+	queryCtx := ctx
+	if queryCtx == nil {
+		var cancel context.CancelFunc
+		queryCtx, cancel = context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+	}
 
 	remote := fmt.Sprintf("https://%s", cfg.GenesisDomain)
 
-	// Fetch commission rewards
+	// Fetch commission and outstanding rewards in parallel
+	var wg sync.WaitGroup
 	commissionRewards := "—"
-	commCmd := commandContext(queryCtx, bin, "query", "distribution", "commission", validatorAddr, "--node", remote, "-o", "json")
-	if commOutput, err := commCmd.Output(); err == nil {
-		var commResult struct {
-			Commission struct {
-				Commission []string `json:"commission"`
-			} `json:"commission"`
-		}
-		if err := json.Unmarshal(commOutput, &commResult); err == nil && len(commResult.Commission.Commission) > 0 {
-			// Extract numeric part from amount string (format: "123.45upc")
-			amountStr := commResult.Commission.Commission[0]
-			// Remove denom suffix
-			amountStr = strings.TrimSuffix(amountStr, "upc")
-			if amount, err := strconv.ParseFloat(amountStr, 64); err == nil {
-				commissionRewards = fmt.Sprintf("%.2f", amount/1e18)
-			}
-		}
-	}
-
-	// Fetch outstanding rewards with retry logic
 	outstandingRewards := "—"
-	var outOutput []byte
-	var outErr error
 
-	// Retry up to 2 times with 2s delay on failure
-	maxRetries := 2
-	for attempt := 0; attempt <= maxRetries; attempt++ {
-		outCmd := commandContext(queryCtx, bin, "query", "distribution", "validator-outstanding-rewards", validatorAddr, "--node", remote, "-o", "json")
-		outOutput, outErr = outCmd.Output()
+	wg.Add(2)
 
-		if outErr == nil {
-			break // Success, exit retry loop
-		}
-
-		// Wait before retry (except on last attempt)
-		if attempt < maxRetries {
-			time.Sleep(2 * time.Second)
-		}
-	}
-
-	// Parse outstanding rewards if fetch succeeded
-	if outErr == nil {
-		var outResult struct {
-			Rewards struct {
-				Rewards []string `json:"rewards"`
-			} `json:"rewards"`
-		}
-		if err := json.Unmarshal(outOutput, &outResult); err == nil && len(outResult.Rewards.Rewards) > 0 {
-			// Extract numeric part from amount string (format: "123.45upc")
-			amountStr := outResult.Rewards.Rewards[0]
-			// Remove denom suffix
-			amountStr = strings.TrimSuffix(amountStr, "upc")
-			if amount, err := strconv.ParseFloat(amountStr, 64); err == nil {
-				outstandingRewards = fmt.Sprintf("%.2f", amount/1e18)
+	// Fetch commission rewards
+	go func() {
+		defer wg.Done()
+		commCmd := commandContext(queryCtx, bin, "query", "distribution", "commission", validatorAddr, "--node", remote, "-o", "json")
+		if commOutput, err := commCmd.Output(); err == nil {
+			var commResult struct {
+				Commission struct {
+					Commission []string `json:"commission"`
+				} `json:"commission"`
+			}
+			if err := json.Unmarshal(commOutput, &commResult); err == nil && len(commResult.Commission.Commission) > 0 {
+				amountStr := commResult.Commission.Commission[0]
+				amountStr = strings.TrimSuffix(amountStr, "upc")
+				if amount, err := strconv.ParseFloat(amountStr, 64); err == nil {
+					commissionRewards = fmt.Sprintf("%.2f", amount/1e18)
+				}
 			}
 		}
-	}
+	}()
 
+	// Fetch outstanding rewards (no retry for speed)
+	go func() {
+		defer wg.Done()
+		outCmd := commandContext(queryCtx, bin, "query", "distribution", "validator-outstanding-rewards", validatorAddr, "--node", remote, "-o", "json")
+		if outOutput, err := outCmd.Output(); err == nil {
+			var outResult struct {
+				Rewards struct {
+					Rewards []string `json:"rewards"`
+				} `json:"rewards"`
+			}
+			if err := json.Unmarshal(outOutput, &outResult); err == nil && len(outResult.Rewards.Rewards) > 0 {
+				amountStr := outResult.Rewards.Rewards[0]
+				amountStr = strings.TrimSuffix(amountStr, "upc")
+				if amount, err := strconv.ParseFloat(amountStr, 64); err == nil {
+					outstandingRewards = fmt.Sprintf("%.2f", amount/1e18)
+				}
+			}
+		}
+	}()
+
+	wg.Wait()
 	return commissionRewards, outstandingRewards, nil
 }
 

@@ -6,7 +6,6 @@ import (
     "sort"
     "strconv"
     "strings"
-    "sync"
     "time"
 
     "github.com/pushchain/push-validator-cli/internal/dashboard"
@@ -76,21 +75,18 @@ func handleValidatorsWithFormat(d *Deps, jsonOut bool) error {
     myValCancel()
 
     type validatorDisplay struct {
-        moniker        string
-        status         string
-        statusOrder    int
-        jailed         bool
-        tokensPC       float64
-        commissionPct  float64
-        operatorAddr   string
-        cosmosAddr     string
-        commissionRwd  string
-        outstandingRwd string
-        evmAddress     string
-        isMyValidator  bool
+        moniker       string
+        status        string
+        statusOrder   int
+        jailed        bool
+        tokensPC      float64
+        commissionPct float64
+        operatorAddr  string
+        cosmosAddr    string
+        evmAddress    string
+        isMyValidator bool
     }
     vals := make([]validatorDisplay, len(valList.Validators))
-    var wg sync.WaitGroup
 
     for i, v := range valList.Validators {
         vals[i] = validatorDisplay{
@@ -131,20 +127,9 @@ func handleValidatorsWithFormat(d *Deps, jsonOut bool) error {
             }
         }
 
-        // Fetch rewards and EVM address in parallel using goroutines
-        wg.Add(1)
-        go func(idx int, addr string) {
-            defer wg.Done()
-            // 3 second timeout per validator to avoid blocking
-            fetchCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-            defer cancel()
-
-            vals[idx].commissionRwd, vals[idx].outstandingRwd, _ = validator.GetValidatorRewards(fetchCtx, cfg, addr)
-            vals[idx].evmAddress = validator.GetEVMAddress(fetchCtx, addr)
-        }(i, v.OperatorAddress)
+        // Convert address to EVM format synchronously (pure Go, no subprocess)
+        vals[i].evmAddress = validator.Bech32ToHex(v.OperatorAddress)
     }
-
-    wg.Wait()
     sort.Slice(vals, func(i, j int) bool {
         // My validator always comes first
         if vals[i].isMyValidator != vals[j].isMyValidator {
@@ -156,7 +141,7 @@ func handleValidatorsWithFormat(d *Deps, jsonOut bool) error {
     c := ui.NewColorConfig()
     fmt.Println()
     fmt.Println(c.Header(" 👥 Active Push Chain Validators "))
-    headers := []string{"VALIDATOR", "COSMOS_ADDR", "STATUS", "STAKE(PC)", "COMM%", "COMM_RWD", "OUTSTND_RWD", "EVM_ADDR"}
+    headers := []string{"VALIDATOR", "STATUS", "STAKE(PC)", "COMM%", "EVM_ADDR"}
     rows := make([][]string, 0, len(vals))
     for _, v := range vals {
         // Check if this is my validator
@@ -173,13 +158,10 @@ func handleValidatorsWithFormat(d *Deps, jsonOut bool) error {
 
         row := []string{
             moniker,
-            truncateAddress(v.cosmosAddr, 24),
             statusStr,
             dashboard.FormatLargeNumber(int64(v.tokensPC)),
             fmt.Sprintf("%.0f%%", v.commissionPct),
-            dashboard.FormatSmartNumber(v.commissionRwd),
-            dashboard.FormatSmartNumber(v.outstandingRwd),
-            truncateAddress(v.evmAddress, 16),
+            v.evmAddress,
         }
 
         // Apply green highlighting to the entire row if it's my validator

@@ -576,7 +576,8 @@ func runRegisterValidatorWithDeps(d *Deps, cfg config.Config, moniker, keyName, 
 		// Always display Account Info section (whether new or existing key)
 		p.Section("Account Info")
 		p.KeyValueLine("EVM Address", evmAddr, "blue")
-		p.KeyValueLine("Cosmos Address", keyInfo.Address, "dim")
+		p.KeyValueLine("Chain", "Push Chain", "dim")
+		p.KeyValueLine("Network", "Testnet", "dim")
 		fmt.Println()
 	}
 

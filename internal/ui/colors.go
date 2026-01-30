@@ -86,7 +86,7 @@ func DefaultTheme() *Theme {
 		Success:     BrightGreen,
 		Warning:     BrightYellow,
 		Error:       BrightRed,
-		Info:        BrightCyan,
+		Info:        BrightBlue,
 
 		// UI elements - Professional and readable
 		Header:      Bold + BrightCyan,
