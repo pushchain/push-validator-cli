@@ -74,6 +74,12 @@ push-validator withdraw-rewards     # Withdraw validator rewards and commission
 push-validator restake-rewards      # Auto-withdraw and restake all rewards to increase validator power
 ```
 
+### Governance
+```bash
+push-validator proposals            # List governance proposals (filter with --status voting|passed|rejected)
+push-validator vote <id> <option>   # Vote on a proposal (yes|no|abstain|no_with_veto)
+```
+
 ### Monitoring
 ```bash
 push-validator sync            # Monitor sync progress

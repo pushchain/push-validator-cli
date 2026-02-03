@@ -679,6 +679,10 @@ func (m *balanceRetryMockValidator) IsAddressValidator(ctx context.Context, cosm
 	return m.inner.IsAddressValidator(ctx, cosmosAddr)
 }
 
+func (m *balanceRetryMockValidator) Vote(ctx context.Context, args validator.VoteArgs) (string, error) {
+	return m.inner.Vote(ctx, args)
+}
+
 func TestRunRegisterValidatorWithDeps_ValidatorAlreadyExists_ReturnsSuccess(t *testing.T) {
 	origOutput := flagOutput
 	origNonInteractive := flagNonInteractive

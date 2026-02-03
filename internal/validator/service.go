@@ -23,6 +23,7 @@ type Service interface {
     Unjail(ctx context.Context, keyName string) (string, error) // returns tx hash
     WithdrawRewards(ctx context.Context, validatorAddr string, keyName string, includeCommission bool) (string, error) // returns tx hash
     Delegate(ctx context.Context, args DelegateArgs) (string, error) // returns tx hash
+    Vote(ctx context.Context, args VoteArgs) (string, error) // returns tx hash
 }
 
 type RegisterArgs struct {
@@ -37,5 +38,11 @@ type DelegateArgs struct {
     ValidatorAddress string
     Amount string
     KeyName string
+}
+
+type VoteArgs struct {
+    ProposalID string
+    Option     string // yes, no, abstain, no_with_veto
+    KeyName    string
 }
 

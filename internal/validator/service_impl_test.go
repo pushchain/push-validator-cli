@@ -972,3 +972,313 @@ exit 1
 
 	_ = callCount
 }
+
+func TestValidator_Vote_Success(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("windows not supported in this test")
+	}
+
+	dir := t.TempDir()
+	binPath := filepath.Join(dir, "pchaind")
+
+	// Script that handles vote command
+	script := `#!/usr/bin/env sh
+cmd="$1"; shift
+if [ "$cmd" = "tx" ]; then
+	mod="$1"; shift
+	if [ "$mod" = "gov" ]; then
+		sub="$1"; shift
+		if [ "$sub" = "vote" ]; then
+			echo "txhash: 0xVOTETXHASH"
+			exit 0
+		fi
+	fi
+fi
+exit 1
+`
+
+	if err := os.WriteFile(binPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	s := NewWith(Options{
+		BinPath:       binPath,
+		HomeDir:       t.TempDir(),
+		ChainID:       "push_42101-1",
+		Keyring:       "test",
+		GenesisDomain: "donut.rpc.push.org",
+		Denom:         "upc",
+	})
+	ctx := context.Background()
+
+	tx, err := s.Vote(ctx, VoteArgs{
+		ProposalID: "1",
+		Option:     "yes",
+		KeyName:    "validator-key",
+	})
+	if err != nil {
+		t.Fatalf("Vote error: %v", err)
+	}
+
+	if tx != "0xVOTETXHASH" {
+		t.Errorf("Vote txhash = %q, want %q", tx, "0xVOTETXHASH")
+	}
+}
+
+func TestValidator_Vote_AllOptions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("windows not supported in this test")
+	}
+
+	dir := t.TempDir()
+	binPath := filepath.Join(dir, "pchaind")
+
+	script := `#!/usr/bin/env sh
+cmd="$1"; shift
+if [ "$cmd" = "tx" ]; then
+	mod="$1"; shift
+	if [ "$mod" = "gov" ]; then
+		sub="$1"; shift
+		if [ "$sub" = "vote" ]; then
+			echo "txhash: 0xVOTE"
+			exit 0
+		fi
+	fi
+fi
+exit 1
+`
+
+	if err := os.WriteFile(binPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	s := NewWith(Options{
+		BinPath:       binPath,
+		HomeDir:       t.TempDir(),
+		ChainID:       "push_42101-1",
+		Keyring:       "test",
+		GenesisDomain: "donut.rpc.push.org",
+		Denom:         "upc",
+	})
+	ctx := context.Background()
+
+	// Test all valid options
+	validOptions := []string{"yes", "no", "abstain", "no_with_veto"}
+	for _, opt := range validOptions {
+		t.Run("option_"+opt, func(t *testing.T) {
+			_, err := s.Vote(ctx, VoteArgs{
+				ProposalID: "1",
+				Option:     opt,
+				KeyName:    "validator-key",
+			})
+			if err != nil {
+				t.Errorf("Vote with option %q error: %v", opt, err)
+			}
+		})
+	}
+}
+
+func TestValidator_Vote_EmptyProposalID(t *testing.T) {
+	bin := makeFakePchaind(t)
+	home := t.TempDir()
+	s := NewWith(Options{
+		BinPath: bin,
+		HomeDir: home,
+	})
+	ctx := context.Background()
+
+	_, err := s.Vote(ctx, VoteArgs{
+		ProposalID: "",
+		Option:     "yes",
+		KeyName:    "validator-key",
+	})
+	if err == nil {
+		t.Fatal("Vote with empty proposal ID should return error")
+	}
+
+	if !strings.Contains(err.Error(), "proposal ID required") {
+		t.Errorf("expected 'proposal ID required' error, got: %v", err)
+	}
+}
+
+func TestValidator_Vote_EmptyOption(t *testing.T) {
+	bin := makeFakePchaind(t)
+	home := t.TempDir()
+	s := NewWith(Options{
+		BinPath: bin,
+		HomeDir: home,
+	})
+	ctx := context.Background()
+
+	_, err := s.Vote(ctx, VoteArgs{
+		ProposalID: "1",
+		Option:     "",
+		KeyName:    "validator-key",
+	})
+	if err == nil {
+		t.Fatal("Vote with empty option should return error")
+	}
+
+	if !strings.Contains(err.Error(), "vote option required") {
+		t.Errorf("expected 'vote option required' error, got: %v", err)
+	}
+}
+
+func TestValidator_Vote_EmptyKeyName(t *testing.T) {
+	bin := makeFakePchaind(t)
+	home := t.TempDir()
+	s := NewWith(Options{
+		BinPath: bin,
+		HomeDir: home,
+	})
+	ctx := context.Background()
+
+	_, err := s.Vote(ctx, VoteArgs{
+		ProposalID: "1",
+		Option:     "yes",
+		KeyName:    "",
+	})
+	if err == nil {
+		t.Fatal("Vote with empty key name should return error")
+	}
+
+	if !strings.Contains(err.Error(), "key name required") {
+		t.Errorf("expected 'key name required' error, got: %v", err)
+	}
+}
+
+func TestValidator_Vote_InvalidOption(t *testing.T) {
+	bin := makeFakePchaind(t)
+	home := t.TempDir()
+	s := NewWith(Options{
+		BinPath: bin,
+		HomeDir: home,
+	})
+	ctx := context.Background()
+
+	invalidOptions := []string{"maybe", "yess", "invalid", "YES!", "1"}
+	for _, opt := range invalidOptions {
+		t.Run("invalid_"+opt, func(t *testing.T) {
+			_, err := s.Vote(ctx, VoteArgs{
+				ProposalID: "1",
+				Option:     opt,
+				KeyName:    "validator-key",
+			})
+			if err == nil {
+				t.Errorf("Vote with invalid option %q should return error", opt)
+			}
+
+			if !strings.Contains(err.Error(), "invalid vote option") {
+				t.Errorf("expected 'invalid vote option' error, got: %v", err)
+			}
+		})
+	}
+}
+
+func TestValidator_Vote_CaseInsensitive(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("windows not supported in this test")
+	}
+
+	dir := t.TempDir()
+	binPath := filepath.Join(dir, "pchaind")
+
+	script := `#!/usr/bin/env sh
+cmd="$1"; shift
+if [ "$cmd" = "tx" ]; then
+	mod="$1"; shift
+	if [ "$mod" = "gov" ]; then
+		echo "txhash: 0xVOTE"
+		exit 0
+	fi
+fi
+exit 1
+`
+
+	if err := os.WriteFile(binPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	s := NewWith(Options{
+		BinPath:       binPath,
+		HomeDir:       t.TempDir(),
+		ChainID:       "push_42101-1",
+		Keyring:       "test",
+		GenesisDomain: "donut.rpc.push.org",
+		Denom:         "upc",
+	})
+	ctx := context.Background()
+
+	// Test uppercase options (should be converted to lowercase)
+	upperOptions := []string{"YES", "NO", "ABSTAIN", "NO_WITH_VETO"}
+	for _, opt := range upperOptions {
+		t.Run("upper_"+opt, func(t *testing.T) {
+			_, err := s.Vote(ctx, VoteArgs{
+				ProposalID: "1",
+				Option:     opt,
+				KeyName:    "validator-key",
+			})
+			if err != nil {
+				t.Errorf("Vote with uppercase option %q error: %v", opt, err)
+			}
+		})
+	}
+}
+
+func TestImproveVoteErrorMessage(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "proposal not found",
+			input: "error: proposal not found",
+			want:  "Proposal not found. Check that the proposal ID is correct.",
+		},
+		{
+			name:  "unknown proposal",
+			input: "unknown proposal id",
+			want:  "Proposal not found. Check that the proposal ID is correct.",
+		},
+		{
+			name:  "inactive proposal",
+			input: "inactive proposal: proposal 1 is not in voting period",
+			want:  "Proposal is not in voting period. You can only vote on active proposals.",
+		},
+		{
+			name:  "already voted",
+			input: "voter has already voted on this proposal",
+			want:  "You have already voted on this proposal.",
+		},
+		{
+			name:  "insufficient fees",
+			input: "insufficient funds to pay fee",
+			want:  "Insufficient balance to pay transaction fees.",
+		},
+		{
+			name:  "unauthorized",
+			input: "unauthorized: signature verification failed",
+			want:  "Transaction signing failed. Check that the key exists and is accessible.",
+		},
+		{
+			name:  "key not found",
+			input: "key not found in keyring",
+			want:  "Transaction signing failed. Check that the key exists and is accessible.",
+		},
+		{
+			name:  "unknown error",
+			input: "some random error message",
+			want:  "some random error message",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := improveVoteErrorMessage(tt.input)
+			if got != tt.want {
+				t.Errorf("improveVoteErrorMessage(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}

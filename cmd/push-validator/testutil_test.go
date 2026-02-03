@@ -107,6 +107,8 @@ type mockValidator struct {
 	withdrawErr     error
 	delegateResult  string
 	delegateErr     error
+	voteResult      string
+	voteErr         error
 	ensureKeyResult validator.KeyInfo
 	ensureKeyErr    error
 	importKeyResult validator.KeyInfo
@@ -139,6 +141,10 @@ func (m *mockValidator) WithdrawRewards(ctx context.Context, validatorAddr strin
 
 func (m *mockValidator) Delegate(ctx context.Context, args validator.DelegateArgs) (string, error) {
 	return m.delegateResult, m.delegateErr
+}
+
+func (m *mockValidator) Vote(ctx context.Context, args validator.VoteArgs) (string, error) {
+	return m.voteResult, m.voteErr
 }
 
 func (m *mockValidator) EnsureKey(ctx context.Context, name string) (validator.KeyInfo, error) {
@@ -193,6 +199,8 @@ type mockFetcher struct {
 	commission      string
 	outstanding     string
 	rewardsErr      error
+	proposals       validator.ProposalList
+	proposalsErr    error
 }
 
 func (m *mockFetcher) GetMyValidator(ctx context.Context, cfg config.Config) (validator.MyValidatorInfo, error) {
@@ -205,6 +213,10 @@ func (m *mockFetcher) GetAllValidators(ctx context.Context, cfg config.Config) (
 
 func (m *mockFetcher) GetRewards(ctx context.Context, cfg config.Config, addr string) (commission, outstanding string, err error) {
 	return m.commission, m.outstanding, m.rewardsErr
+}
+
+func (m *mockFetcher) GetProposals(ctx context.Context, cfg config.Config) (validator.ProposalList, error) {
+	return m.proposals, m.proposalsErr
 }
 
 // containsSubstr checks if s contains substr.

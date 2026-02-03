@@ -37,6 +37,7 @@ type ValidatorFetcher interface {
 	GetMyValidator(ctx context.Context, cfg config.Config) (validator.MyValidatorInfo, error)
 	GetAllValidators(ctx context.Context, cfg config.Config) (validator.ValidatorList, error)
 	GetRewards(ctx context.Context, cfg config.Config, addr string) (commission, outstanding string, err error)
+	GetProposals(ctx context.Context, cfg config.Config) (validator.ProposalList, error)
 }
 
 // Deps holds all injectable dependencies for command handlers.
@@ -108,6 +109,10 @@ func (f *prodFetcher) GetAllValidators(ctx context.Context, cfg config.Config) (
 
 func (f *prodFetcher) GetRewards(ctx context.Context, cfg config.Config, addr string) (commission, outstanding string, err error) {
 	return validator.GetCachedRewards(ctx, cfg, addr)
+}
+
+func (f *prodFetcher) GetProposals(ctx context.Context, cfg config.Config) (validator.ProposalList, error) {
+	return validator.GetCachedProposals(ctx, cfg)
 }
 
 // ttyPrompter is the production implementation of Prompter.

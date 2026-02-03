@@ -124,6 +124,10 @@ type Fetcher struct {
 	rewardsCache map[string]rewardsCacheEntry
 	rewardsTTL   time.Duration
 
+	// Proposals cache
+	proposals     ProposalList
+	proposalsTime time.Time
+
 	cacheTTL time.Duration
 }
 
@@ -571,6 +575,161 @@ func parseStatus(status string) string {
 	default:
 		return status
 	}
+}
+
+// parseProposalStatus converts proposal status to human-readable format
+func parseProposalStatus(status string) string {
+	switch status {
+	case "PROPOSAL_STATUS_DEPOSIT_PERIOD":
+		return "DEPOSIT"
+	case "PROPOSAL_STATUS_VOTING_PERIOD":
+		return "VOTING"
+	case "PROPOSAL_STATUS_PASSED":
+		return "PASSED"
+	case "PROPOSAL_STATUS_REJECTED":
+		return "REJECTED"
+	case "PROPOSAL_STATUS_FAILED":
+		return "FAILED"
+	default:
+		return status
+	}
+}
+
+// GetProposals fetches all governance proposals with 30s caching
+func (f *Fetcher) GetProposals(ctx context.Context, cfg config.Config) (ProposalList, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	// Force fetch on first call (cache is zero-initialized)
+	if f.proposalsTime.IsZero() {
+		list, err := f.fetchProposals(ctx, cfg)
+		if err != nil {
+			return ProposalList{}, err
+		}
+		f.proposals = list
+		f.proposalsTime = time.Now()
+		return list, nil
+	}
+
+	// Return cached if still valid
+	if time.Since(f.proposalsTime) < f.cacheTTL && f.proposals.Total > 0 {
+		return f.proposals, nil
+	}
+
+	// Fetch fresh data
+	list, err := f.fetchProposals(ctx, cfg)
+	if err != nil {
+		// Return stale cache if available
+		if f.proposals.Total > 0 {
+			return f.proposals, nil
+		}
+		return ProposalList{}, err
+	}
+
+	// Update cache
+	f.proposals = list
+	f.proposalsTime = time.Now()
+	return list, nil
+}
+
+// fetchProposals queries all governance proposals from the network
+func (f *Fetcher) fetchProposals(ctx context.Context, cfg config.Config) (ProposalList, error) {
+	bin, err := resolvePchaindBin(cfg.HomeDir)
+	if err != nil {
+		return ProposalList{}, fmt.Errorf("pchaind not found: %w", err)
+	}
+
+	remote := fmt.Sprintf("https://%s", cfg.GenesisDomain)
+	cmd := commandContext(ctx, bin, "query", "gov", "proposals", "--node", remote, "-o", "json")
+	output, err := cmd.Output()
+	if err != nil {
+		return ProposalList{}, fmt.Errorf("query proposals failed: %w", err)
+	}
+
+	var result struct {
+		Proposals []struct {
+			ID       string `json:"id"`
+			Messages []struct {
+				Type    string `json:"@type"`
+				Content struct {
+					Title       string `json:"title"`
+					Description string `json:"description"`
+				} `json:"content,omitempty"`
+				// For v1 gov proposals
+				Title       string `json:"title,omitempty"`
+				Description string `json:"description,omitempty"`
+			} `json:"messages"`
+			Status        string `json:"status"`
+			VotingEndTime string `json:"voting_end_time"`
+			// Legacy fields for older proposal formats
+			Content struct {
+				Title       string `json:"title"`
+				Description string `json:"description"`
+			} `json:"content,omitempty"`
+			Title string `json:"title,omitempty"`
+		} `json:"proposals"`
+	}
+
+	if err := json.Unmarshal(output, &result); err != nil {
+		return ProposalList{}, fmt.Errorf("parse proposals failed: %w", err)
+	}
+
+	proposals := make([]Proposal, 0, len(result.Proposals))
+	for _, p := range result.Proposals {
+		// Extract title from various possible locations
+		title := p.Title
+		if title == "" && p.Content.Title != "" {
+			title = p.Content.Title
+		}
+		if title == "" && len(p.Messages) > 0 {
+			if p.Messages[0].Title != "" {
+				title = p.Messages[0].Title
+			} else if p.Messages[0].Content.Title != "" {
+				title = p.Messages[0].Content.Title
+			}
+		}
+		if title == "" {
+			title = "Untitled Proposal"
+		}
+
+		// Extract description
+		description := ""
+		if p.Content.Description != "" {
+			description = p.Content.Description
+		} else if len(p.Messages) > 0 {
+			if p.Messages[0].Description != "" {
+				description = p.Messages[0].Description
+			} else if p.Messages[0].Content.Description != "" {
+				description = p.Messages[0].Content.Description
+			}
+		}
+
+		status := parseProposalStatus(p.Status)
+
+		// Include voting end time if available (not default epoch time)
+		votingEnd := ""
+		if p.VotingEndTime != "" && p.VotingEndTime != "0001-01-01T00:00:00Z" {
+			votingEnd = p.VotingEndTime
+		}
+
+		proposals = append(proposals, Proposal{
+			ID:          p.ID,
+			Title:       title,
+			Status:      status,
+			VotingEnd:   votingEnd,
+			Description: description,
+		})
+	}
+
+	return ProposalList{
+		Proposals: proposals,
+		Total:     len(proposals),
+	}, nil
+}
+
+// GetCachedProposals returns cached proposals list
+func GetCachedProposals(ctx context.Context, cfg config.Config) (ProposalList, error) {
+	return globalFetcher.GetProposals(ctx, cfg)
 }
 
 // GetValidatorRewards fetches commission and outstanding rewards for a validator

@@ -162,6 +162,12 @@ func init() {
 		fmt.Fprintln(w, c.FormatCommandAligned("restake-rewards", "Withdraw and restake all rewards", cmdWidth))
 		fmt.Fprintln(w)
 
+		// Governance
+		fmt.Fprintln(w, c.SubHeader("Governance"))
+		fmt.Fprintln(w, c.FormatCommandAligned("proposals", "List governance proposals", cmdWidth))
+		fmt.Fprintln(w, c.FormatCommandAligned("vote <id> <option>", "Vote on a proposal (yes|no|abstain|no_with_veto)", cmdWidth))
+		fmt.Fprintln(w)
+
 		// Maintenance
 		fmt.Fprintln(w, c.SubHeader("Maintenance"))
 		fmt.Fprintln(w, c.FormatCommandAligned("backup", "Create config/state backup archive", cmdWidth))

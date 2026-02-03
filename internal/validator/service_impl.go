@@ -706,3 +706,96 @@ func (s *svc) Delegate(ctx context.Context, args DelegateArgs) (string, error) {
 
 	return "", errors.New("delegation successful but transaction hash not found in output")
 }
+
+// Vote submits a vote on a governance proposal
+func (s *svc) Vote(ctx context.Context, args VoteArgs) (string, error) {
+	if s.opts.BinPath == "" {
+		s.opts.BinPath = "pchaind"
+	}
+	if args.ProposalID == "" {
+		return "", errors.New("proposal ID required")
+	}
+	if args.Option == "" {
+		return "", errors.New("vote option required")
+	}
+	if args.KeyName == "" {
+		return "", errors.New("key name required")
+	}
+
+	// Validate vote option
+	validOptions := map[string]bool{
+		"yes":          true,
+		"no":           true,
+		"abstain":      true,
+		"no_with_veto": true,
+	}
+	option := strings.ToLower(args.Option)
+	if !validOptions[option] {
+		return "", fmt.Errorf("invalid vote option '%s': must be yes, no, abstain, or no_with_veto", args.Option)
+	}
+
+	// Submit vote transaction
+	remote := fmt.Sprintf("https://%s", s.opts.GenesisDomain)
+	ctxTimeout, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+
+	cmd := commandContext(ctxTimeout, s.opts.BinPath, "tx", "gov", "vote",
+		args.ProposalID,
+		option,
+		"--from", args.KeyName,
+		"--chain-id", s.opts.ChainID,
+		"--keyring-backend", s.opts.Keyring,
+		"--home", s.opts.HomeDir,
+		"--node", remote,
+		"--gas=auto", "--gas-adjustment=1.3", fmt.Sprintf("--gas-prices=1000000000%s", s.opts.Denom),
+		"--yes",
+	)
+
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		// Try to extract a clean error message
+		msg := extractErrorLine(string(out))
+		if msg == "" {
+			msg = err.Error()
+		}
+		// Improve error messages for common vote failures
+		msg = improveVoteErrorMessage(msg)
+		return "", errors.New(msg)
+	}
+
+	// Extract tx hash from output
+	lines := strings.Split(string(out), "\n")
+	for _, line := range lines {
+		if strings.Contains(line, "txhash:") {
+			parts := strings.SplitN(line, "txhash:", 2)
+			if len(parts) > 1 {
+				return strings.TrimSpace(parts[1]), nil
+			}
+		}
+	}
+
+	return "", errors.New("vote submitted but transaction hash not found in output")
+}
+
+// improveVoteErrorMessage provides user-friendly error messages for common vote failures
+func improveVoteErrorMessage(msg string) string {
+	lower := strings.ToLower(msg)
+
+	if strings.Contains(lower, "proposal not found") || strings.Contains(lower, "unknown proposal") {
+		return "Proposal not found. Check that the proposal ID is correct."
+	}
+	if strings.Contains(lower, "inactive proposal") || strings.Contains(lower, "not in voting period") {
+		return "Proposal is not in voting period. You can only vote on active proposals."
+	}
+	if strings.Contains(lower, "voter has already voted") || strings.Contains(lower, "already voted") {
+		return "You have already voted on this proposal."
+	}
+	if strings.Contains(lower, "insufficient") && strings.Contains(lower, "fee") {
+		return "Insufficient balance to pay transaction fees."
+	}
+	if strings.Contains(lower, "unauthorized") || strings.Contains(lower, "key not found") {
+		return "Transaction signing failed. Check that the key exists and is accessible."
+	}
+
+	return msg
+}

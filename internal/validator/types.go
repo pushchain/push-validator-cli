@@ -40,3 +40,18 @@ type MyValidatorInfo struct {
 	ValidatorExistsWithSameMoniker bool   // True if a different validator uses this node's moniker
 	ConflictingMoniker            string // The moniker that conflicts
 }
+
+// Proposal contains information about a governance proposal
+type Proposal struct {
+	ID          string
+	Title       string
+	Status      string // VOTING_PERIOD, PASSED, REJECTED, DEPOSIT_PERIOD
+	VotingEnd   string // RFC3339 formatted timestamp (empty if not in voting period)
+	Description string
+}
+
+// ProposalList contains a list of governance proposals
+type ProposalList struct {
+	Proposals []Proposal
+	Total     int
+}

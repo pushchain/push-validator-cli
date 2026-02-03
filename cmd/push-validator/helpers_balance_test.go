@@ -220,3 +220,7 @@ func (m *balanceIncrementingValidator) IsAddressValidator(ctx context.Context, c
 	return false, nil
 }
 
+func (m *balanceIncrementingValidator) Vote(ctx context.Context, args validator.VoteArgs) (string, error) {
+	return "", nil
+}
+
