@@ -24,7 +24,8 @@ type HTTPDoer interface {
 type Updater struct {
 	CurrentVersion string
 	BinaryPath     string // Path to current executable
-	http           HTTPDoer
+	http           HTTPDoer // For API calls (30s timeout)
+	downloadHTTP   HTTPDoer // For binary downloads (10min timeout)
 }
 
 // New creates an Updater with the default HTTP client.
@@ -54,6 +55,7 @@ func NewWith(currentVersion string, h HTTPDoer) (*Updater, error) {
 		CurrentVersion: currentVersion,
 		BinaryPath:     realPath,
 		http:           h,
+		downloadHTTP:   &http.Client{Timeout: downloadTimeout},
 	}, nil
 }
 
@@ -85,7 +87,12 @@ func (u *Updater) Download(asset *Asset, progress ProgressFunc) ([]byte, error) 
 		return nil, fmt.Errorf("failed to create download request: %w", err)
 	}
 
-	resp, err := u.http.Do(req)
+	// Use downloadHTTP for longer timeout, fall back to http if not set (e.g., in tests)
+	client := u.downloadHTTP
+	if client == nil {
+		client = u.http
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to download: %w", err)
 	}

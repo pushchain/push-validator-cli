@@ -19,7 +19,8 @@ const (
 	releasesURL      = "https://api.github.com/repos/pushchain/push-validator-cli/releases"
 	releaseByTagURL  = "https://api.github.com/repos/pushchain/push-validator-cli/releases/tags/%s"
 
-	httpTimeout = 30 * time.Second
+	httpTimeout     = 30 * time.Second     // For API calls
+	downloadTimeout = 10 * time.Minute     // For binary downloads
 )
 
 // FetchLatestRelease gets the latest release from GitHub
