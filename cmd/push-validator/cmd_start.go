@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -200,6 +201,56 @@ var startCmd = &cobra.Command{
 			})
 			return err
 		}
+
+		// Verify the node process actually survived startup and is serving RPC.
+		// PID checks are racy for detached processes — the node may crash seconds after
+		// launch (e.g. corrupt DB). Polling RPC for up to 10s is more reliable.
+		nodeAlive := false
+		for i := 0; i < 10; i++ {
+			time.Sleep(1 * time.Second)
+			if !sup.IsRunning() {
+				break // process already exited
+			}
+			if process.IsRPCListening("127.0.0.1:26657", 800*time.Millisecond) {
+				nodeAlive = true
+				break
+			}
+		}
+		if !nodeAlive {
+			logPath := sup.LogPath()
+			// Read last few lines from log for diagnostics
+			logTail := ""
+			if b, err := os.ReadFile(logPath); err == nil {
+				lines := strings.Split(strings.TrimSpace(string(b)), "\n")
+				start := len(lines) - 5
+				if start < 0 {
+					start = 0
+				}
+				logTail = strings.Join(lines[start:], "\n")
+			}
+			ui.PrintError(ui.ErrorMessage{
+				Problem: "Node is not running",
+				Causes: []string{
+					"Node crashed on startup (corrupt or incomplete database)",
+					"Incompatible binary version for existing data",
+					"Missing required files in data directory",
+				},
+				Actions: []string{
+					"Check logs: cat " + logPath,
+					"Try resetting: push-validator reset && push-validator start",
+					"If the issue persists, re-download the snapshot",
+				},
+			})
+			if logTail != "" {
+				fmt.Println()
+				fmt.Println("  Last log lines:")
+				for _, line := range strings.Split(logTail, "\n") {
+					fmt.Println("    " + line)
+				}
+			}
+			return fmt.Errorf("node process is not running")
+		}
+
 		if flagOutput == "json" {
 			p.JSON(map[string]any{"ok": true, "action": "start", "already_running": isAlreadyRunning, "cosmovisor": true})
 		} else {
@@ -234,6 +285,20 @@ func init() {
 	rootCmd.AddCommand(startCmd)
 }
 
+// defaultSnapshotSyncThreshold is the number of blocks behind the chain tip
+// at which the CLI will proactively download a fresh snapshot rather than
+// syncing block-by-block. Override via PUSH_SNAPSHOT_THRESHOLD env var.
+const defaultSnapshotSyncThreshold int64 = 25000
+
+func snapshotSyncThreshold() int64 {
+	if v := os.Getenv("PUSH_SNAPSHOT_THRESHOLD"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
+			return n
+		}
+	}
+	return defaultSnapshotSyncThreshold
+}
+
 // handlePostStartFlow manages the post-start flow based on validator status.
 // Returns false if an error occurred (non-fatal), true if flow completed successfully.
 func handlePostStartFlow(cfg config.Config, p *ui.Printer) bool {
@@ -263,6 +328,87 @@ func handlePostStartFlow(cfg config.Config, p *ui.Printer) bool {
 		// Node is still syncing - wait for sync to complete before validator checks
 		fmt.Println(p.Colors.Info("  ▸ Node is syncing with the network..."))
 		fmt.Println(p.Colors.Apply(p.Colors.Theme.Description, "    Waiting for sync to complete...\n"))
+
+		// Proactive snapshot: if far behind, downloading a snapshot is faster than block-by-block sync
+		blockDiff := snap.Chain.RemoteHeight - snap.Chain.LocalHeight
+		if snap.Chain.RemoteHeight > 0 && snap.Chain.LocalHeight > 0 && blockDiff > snapshotSyncThreshold() {
+			fmt.Println(p.Colors.Info("▸ Accelerating Sync"))
+			fmt.Printf("  Node is %d blocks behind the chain tip.\n", blockDiff)
+			estimatedHours := float64(blockDiff) / 15.0 / 3600.0
+			if estimatedHours >= 1.0 {
+				fmt.Printf("  Downloading a fresh snapshot (saves ~%.0fh of block-by-block syncing)...\n\n", estimatedHours)
+			} else {
+				fmt.Printf("  Downloading a fresh snapshot to speed up sync...\n\n")
+			}
+
+			snapshotErr := func() error {
+				sup := newSupervisor(cfg.HomeDir)
+
+				fmt.Println(p.Colors.Info("    Stopping node..."))
+				if err := sup.Stop(); err != nil {
+					// Ignore stop errors - node might not be running
+				}
+				time.Sleep(2 * time.Second)
+
+				fmt.Println(p.Colors.Info("    Clearing blockchain data..."))
+				if err := admin.Reset(admin.ResetOptions{
+					HomeDir:      cfg.HomeDir,
+					BinPath:      findPchaind(),
+					KeepAddrBook: true,
+				}); err != nil {
+					return fmt.Errorf("reset failed: %w", err)
+				}
+
+				fmt.Println(p.Colors.Info("    Downloading snapshot..."))
+				snapshotSvc := snapshot.New()
+				if err := snapshotSvc.Download(context.Background(), snapshot.Options{
+					SnapshotURL: cfg.SnapshotURL,
+					HomeDir:     cfg.HomeDir,
+					Progress:    createSnapshotProgressCallback(flagOutput),
+				}); err != nil {
+					return fmt.Errorf("snapshot download failed: %w", err)
+				}
+
+				fmt.Println(p.Colors.Info("    Extracting snapshot..."))
+				if err := snapshotSvc.Extract(context.Background(), snapshot.ExtractOptions{
+					HomeDir:   cfg.HomeDir,
+					TargetDir: filepath.Join(cfg.HomeDir, "data"),
+					Progress:  createSnapshotProgressCallback(flagOutput),
+				}); err != nil {
+					return fmt.Errorf("snapshot extract failed: %w", err)
+				}
+
+				// Ensure priv_validator_state.json exists after extraction
+				pvsPath := filepath.Join(cfg.HomeDir, "data", "priv_validator_state.json")
+				if _, err := os.Stat(pvsPath); os.IsNotExist(err) {
+					_ = os.WriteFile(pvsPath, []byte(`{"height":"0","round":0,"step":0}`+"\n"), 0o644)
+				}
+
+				fmt.Println(p.Colors.Info("    Restarting node..."))
+				_, err := sup.Start(process.StartOpts{
+					HomeDir: cfg.HomeDir,
+					Moniker: os.Getenv("MONIKER"),
+					BinPath: findPchaind(),
+				})
+				if err != nil {
+					return fmt.Errorf("restart failed: %w", err)
+				}
+				time.Sleep(5 * time.Second)
+				return nil
+			}()
+
+			if snapshotErr != nil {
+				fmt.Println()
+				fmt.Println(p.Colors.Warning("  " + p.Colors.Emoji("!") + " Snapshot optimization failed: " + snapshotErr.Error()))
+				fmt.Println(p.Colors.Apply(p.Colors.Theme.Description, "    Falling back to block-by-block sync..."))
+				fmt.Println()
+			} else {
+				fmt.Println()
+				fmt.Println(p.Colors.Success("  " + p.Colors.Emoji("✓") + " Snapshot restored — syncing remaining blocks..."))
+				fmt.Println()
+			}
+		}
+
 		fmt.Println(p.Colors.Info("▸ Monitoring Sync Progress"))
 
 		// Wait for sync to complete using sync monitor
@@ -316,7 +462,7 @@ func handlePostStartFlow(cfg config.Config, p *ui.Printer) bool {
 			return nil
 		}
 
-		if err := syncmon.RunWithRetry(context.Background(), syncmon.RetryOptions{
+		syncErr := syncmon.RunWithRetry(context.Background(), syncmon.RetryOptions{
 			Options: syncmon.Options{
 				LocalRPC:     "http://127.0.0.1:26657",
 				RemoteRPC:    remoteURL,
@@ -331,10 +477,11 @@ func handlePostStartFlow(cfg config.Config, p *ui.Printer) bool {
 			},
 			MaxRetries: 3,
 			ResetFunc:  resetFunc,
-		}); err != nil {
-			// Sync failed after retries - show warning and dashboard
+		})
+		if syncErr != nil {
+			// Sync failed - show warning and dashboard
 			fmt.Println()
-			fmt.Println(p.Colors.Warning("  " + p.Colors.Emoji("⚠") + " Sync failed after retries"))
+			fmt.Println(p.Colors.Warning("  " + p.Colors.Emoji("⚠") + " Sync failed: " + syncErr.Error()))
 			fmt.Println(p.Colors.Apply(p.Colors.Theme.Description, "    Try: push-validator reset && push-validator start"))
 			showDashboardPrompt(cfg, p)
 			return false

@@ -58,8 +58,12 @@ func Run(ctx context.Context, opts Options) error {
 	}
 	lastProgress := newAtomicTime(time.Now())
 	var rpcFailStart time.Time // zero = not failing
-	const rpcFailTimeout = 30 * time.Second
+	const rpcFailTimeout = 60 * time.Second
 	var lastTickHeight int64
+	// Height-based sync completion: if local >= remote-tolerance for this long, consider synced
+	const heightSyncedTolerance int64 = 5
+	const heightSyncedRequired = 30 * time.Second
+	var heightSyncedSince time.Time // zero = not yet within tolerance
 
 	tty := isTTY()
 	if opts.Quiet {
@@ -78,10 +82,20 @@ func Run(ctx context.Context, opts Options) error {
 	if !waitTCP(hostport, 60*time.Second) {
 		return fmt.Errorf("RPC not listening on %s", hostport)
 	}
+	// Wait for RPC to be fully functional (not just TCP port open).
+	// After snapshot restore, the node may need time to load application state.
+	if !waitRPCReady(local, 90*time.Second) {
+		return ErrSyncStuck
+	}
 	cli := node.New(local)
 	headers, err := cli.SubscribeHeaders(ctx)
 	if err != nil {
-		return fmt.Errorf("ws subscribe: %w", err)
+		// WS not available — fall back to tick-based RPC polling.
+		// This is common during block sync when the node is still initializing.
+		headers = nil
+		if opts.Debug {
+			fmt.Fprintf(opts.Out, "  [DEBUG] WS subscribe failed (%v) — using RPC polling\n", err)
+		}
 	}
 
 	// Remote (denominator) via WebSocket headers
@@ -94,6 +108,18 @@ func Run(ctx context.Context, opts Options) error {
 
 	buf := make([]pt, 0, opts.Window)
 	var lastRemote int64
+	// Seed remote height immediately via HTTP so the progress bar denominator
+	// is correct from the first render (WS may take time or fail entirely).
+	// Retry a few times since remote RPC may rate-limit (429).
+	for i := 0; i < 3; i++ {
+		if h := probeRemoteOnce(opts.RemoteRPC, 0); h > 0 {
+			lastRemote = h
+			break
+		}
+		time.Sleep(time.Duration(i+1) * time.Second)
+	}
+	var lastRemoteProbeAt time.Time // cooldown to avoid hammering rate-limited remote
+	const remoteProbeInterval = 5 * time.Second
 	var baseH int64
 	var baseRemote int64
 	var barPrinted bool
@@ -120,9 +146,18 @@ func Run(ctx context.Context, opts Options) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case rhd, ok := <-remoteHeaders:
-			if remoteWSErr == nil && ok {
+			if !ok {
+				remoteHeaders = nil // prevent busy-loop on closed channel
+				break
+			}
+			if remoteWSErr == nil {
 				lastProgress.Update()
 				lastRemote = rhd.Height
+				// Reset baseline if remote height jumped significantly (stale baseline from bad initial data)
+				if baseRemote > 0 && lastRemote > baseRemote+1000 {
+					baseH = 0
+					baseRemote = 0
+				}
 				var cur int64
 				if len(buf) > 0 {
 					cur = buf[len(buf)-1].h
@@ -306,18 +341,41 @@ func Run(ctx context.Context, opts Options) error {
 			if !barPrinted {
 				cur := st.Height
 				remoteH := lastRemote
-				if remoteH == 0 { // quick remote probe
-					remoteH = probeRemoteOnce(opts.RemoteRPC, cur)
+				if remoteH == 0 && time.Since(lastRemoteProbeAt) >= remoteProbeInterval {
+					lastRemoteProbeAt = time.Now()
+					remoteH = probeRemoteOnce(opts.RemoteRPC, 0)
+					if remoteH > 0 {
+						lastRemote = remoteH
+					}
 				}
-				if remoteH < cur {
+				if remoteH > 0 && remoteH < cur {
 					remoteH = cur
 				}
 				// If already synced but local height not yet reported, align to remote
 				if !st.CatchingUp && cur < remoteH {
 					cur = remoteH
 				}
-				// Avoid printing a misleading bar when cur is 0; wait for actual height
+				// Node is loading state from snapshot — show a waiting message
 				if cur == 0 {
+					if tty {
+						fmt.Fprintf(opts.Out, "\r\033[K  → Waiting for node to load state...")
+					}
+					break
+				}
+				// If remote unknown, show height-only progress and proceed
+				if remoteH == 0 {
+					if tty {
+						fmt.Fprintf(opts.Out, "\r\033[K  → Syncing  height: %d  (fetching remote height...)", cur)
+					}
+					// Still mark bar as printed so active sync tracking can kick in
+					if !holdStarted {
+						firstBarTime = time.Now()
+						holdStarted = true
+					}
+					barPrinted = true
+					if baseH == 0 {
+						baseH = cur
+					}
 					break
 				}
 				var percent float64
@@ -369,8 +427,25 @@ func Run(ctx context.Context, opts Options) error {
 					}
 					// Calculate progress using baseline logic
 					remoteH := lastRemote
+					if remoteH == 0 && time.Since(lastRemoteProbeAt) >= remoteProbeInterval {
+						lastRemoteProbeAt = time.Now()
+						remoteH = probeRemoteOnce(opts.RemoteRPC, 0)
+						if remoteH > 0 {
+							lastRemote = remoteH
+						}
+					}
+					// If remote still unknown, show height-only with rate
 					if remoteH == 0 {
-						remoteH = probeRemoteOnce(opts.RemoteRPC, cur)
+						rate := movingRatePt(buf)
+						if rate <= 0 {
+							rate = 0
+						}
+						if tty {
+							fmt.Fprintf(opts.Out, "\r\033[K  → Syncing  height: %d  %.1f blk/s  (fetching remote height...)", cur, rate)
+						} else if opts.Quiet {
+							fmt.Fprintf(opts.Out, "  height=%d rate=%.2f\n", cur, rate)
+						}
+						break
 					}
 					if remoteH < cur {
 						remoteH = cur
@@ -417,6 +492,53 @@ func Run(ctx context.Context, opts Options) error {
 					}
 				}
 			}
+			// Height-based completion fallback: if catching_up is still true but local height
+			// is within tolerance of remote for a sustained period, treat as synced.
+			// This handles Cosmos SDK nodes that delay flipping catching_up even at tip.
+			if st.CatchingUp && barPrinted && holdStarted {
+				cur := st.Height
+				remoteH := lastRemote
+				if remoteH == 0 && time.Since(lastRemoteProbeAt) >= remoteProbeInterval {
+					lastRemoteProbeAt = time.Now()
+					remoteH = probeRemoteOnce(opts.RemoteRPC, 0)
+					if remoteH > 0 {
+						lastRemote = remoteH
+					}
+				}
+				if cur > 0 && remoteH > 0 && cur >= remoteH-heightSyncedTolerance {
+					if heightSyncedSince.IsZero() {
+						heightSyncedSince = time.Now()
+					} else if time.Since(heightSyncedSince) >= heightSyncedRequired {
+						// Node has been at tip for long enough — treat as synced
+						if remoteH < cur {
+							remoteH = cur
+						}
+						percent := float64(cur) / float64(remoteH) * 100
+						percent = floor2(percent)
+						if percent > 100 {
+							percent = 100
+						}
+						line := renderProgressWithQuiet(percent, cur, remoteH, opts.Quiet)
+						rate, eta := progressRateAndETA(buf, cur, remoteH)
+						lineWithETA := line
+						if eta != "" {
+							lineWithETA += eta
+						}
+						if tty {
+							fmt.Fprintf(opts.Out, "\r\033[K  %s\n", lineWithETA)
+						} else {
+							if opts.Quiet {
+								fmt.Fprintf(opts.Out, "height=%d/%d rate=%.2f%s\n", cur, remoteH, rate, eta)
+							} else {
+								fmt.Fprintf(opts.Out, "%s height=%d/%d rate=%.2f blk/s%s\n", time.Now().Format(time.Kitchen), cur, remoteH, rate, eta)
+							}
+						}
+						return nil
+					}
+				} else {
+					heightSyncedSince = time.Time{} // reset if height fell behind
+				}
+			}
 			// While within minShow and already not catching_up, keep the bar live-updating
 			if !st.CatchingUp && barPrinted && time.Since(firstBarTime) < minShow {
 				cur := st.Height
@@ -424,10 +546,14 @@ func Run(ctx context.Context, opts Options) error {
 					cur = buf[len(buf)-1].h
 				}
 				remoteH := lastRemote
-				if remoteH == 0 {
-					remoteH = probeRemoteOnce(opts.RemoteRPC, cur)
+				if remoteH == 0 && time.Since(lastRemoteProbeAt) >= remoteProbeInterval {
+					lastRemoteProbeAt = time.Now()
+					remoteH = probeRemoteOnce(opts.RemoteRPC, 0)
+					if remoteH > 0 {
+						lastRemote = remoteH
+					}
 				}
-				if remoteH < cur {
+				if remoteH > 0 && remoteH < cur {
 					remoteH = cur
 				}
 				percent := 0.0
@@ -466,10 +592,14 @@ func Run(ctx context.Context, opts Options) error {
 			if !st.CatchingUp && holdStarted && time.Since(firstBarTime) >= minShow {
 				cur := st.Height
 				remoteH := lastRemote
-				if remoteH == 0 {
-					remoteH = probeRemoteOnce(opts.RemoteRPC, cur)
+				if remoteH == 0 && time.Since(lastRemoteProbeAt) >= remoteProbeInterval {
+					lastRemoteProbeAt = time.Now()
+					remoteH = probeRemoteOnce(opts.RemoteRPC, 0)
+					if remoteH > 0 {
+						lastRemote = remoteH
+					}
 				}
-				if remoteH < cur {
+				if remoteH > 0 && remoteH < cur {
 					remoteH = cur
 				}
 				percent := 0.0
@@ -659,6 +789,42 @@ func waitTCP(hostport string, d time.Duration) bool {
 	return false
 }
 
+// waitRPCReady waits for the node's /status RPC endpoint to return HTTP 200
+// with a non-zero block height. After snapshot restore the TCP port may open
+// before the node has finished loading application state.
+func waitRPCReady(base string, d time.Duration) bool {
+	base = strings.TrimRight(base, "/")
+	httpc := &http.Client{Timeout: 2 * time.Second}
+	deadline := time.Now().Add(d)
+	for time.Now().Before(deadline) {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, base+"/status", nil)
+		resp, err := httpc.Do(req)
+		cancel()
+		if err == nil {
+			if resp.StatusCode == 200 {
+				// Also check that height > 0 so the node has loaded state
+				var payload struct {
+					Result struct {
+						SyncInfo struct {
+							Height string `json:"latest_block_height"`
+						} `json:"sync_info"`
+					} `json:"result"`
+				}
+				if decErr := json.NewDecoder(resp.Body).Decode(&payload); decErr == nil {
+					if h, _ := strconvParseInt(payload.Result.SyncInfo.Height); h > 0 {
+						_ = resp.Body.Close()
+						return true
+					}
+				}
+			}
+			_ = resp.Body.Close()
+		}
+		time.Sleep(2 * time.Second)
+	}
+	return false
+}
+
 // probeRemoteOnce fetches a single remote height with a small timeout.
 func probeRemoteOnce(base string, fallback int64) int64 {
 	base = strings.TrimRight(base, "/")
@@ -674,6 +840,9 @@ func probeRemoteOnce(base string, fallback int64) int64 {
 		return fallback
 	}
 	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != 200 {
+		return fallback
+	}
 	var payload struct {
 		Result struct {
 			SyncInfo struct {

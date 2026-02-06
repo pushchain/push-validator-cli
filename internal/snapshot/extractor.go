@@ -80,11 +80,21 @@ func extractTarLz4(archivePath, destDir string, progress ExtractProgressFunc) er
 			}
 
 			// Copy contents
-			if _, err := io.Copy(outFile, tarReader); err != nil {
+			written, copyErr := io.Copy(outFile, tarReader)
+			if copyErr != nil {
 				outFile.Close()
-				return fmt.Errorf("write file %s: %w", cleanName, err)
+				return fmt.Errorf("write file %s: %w", cleanName, copyErr)
 			}
-			outFile.Close()
+
+			// Verify all bytes were written
+			if header.Size > 0 && written != header.Size {
+				outFile.Close()
+				return fmt.Errorf("incomplete extraction of %s: wrote %d of %d bytes (disk full?)", cleanName, written, header.Size)
+			}
+
+			if err := outFile.Close(); err != nil {
+				return fmt.Errorf("close file %s: %w", cleanName, err)
+			}
 
 		case tar.TypeSymlink:
 			// Security: validate symlink target

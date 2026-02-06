@@ -258,6 +258,7 @@ func isCacheValid(homeDir, remoteChecksum string) bool {
 
 // copyDir recursively copies a directory from src to dst.
 // Used as fallback when os.Rename fails (cross-device move).
+// Returns an error if any file fails to copy completely (e.g. disk full).
 func copyDir(src, dst string) error {
 	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -286,11 +287,43 @@ func copyDir(src, dst string) error {
 		if err != nil {
 			return err
 		}
-		defer dstFile.Close()
 
-		_, err = io.Copy(dstFile, srcFile)
-		return err
+		written, err := io.Copy(dstFile, srcFile)
+		if err != nil {
+			dstFile.Close()
+			return fmt.Errorf("write %s: %w", relPath, err)
+		}
+
+		// Verify all bytes were written
+		if written != info.Size() {
+			dstFile.Close()
+			return fmt.Errorf("incomplete write for %s: wrote %d of %d bytes (disk full?)", relPath, written, info.Size())
+		}
+
+		// Flush to disk to ensure data is persisted
+		if err := dstFile.Sync(); err != nil {
+			dstFile.Close()
+			return fmt.Errorf("sync %s: %w", relPath, err)
+		}
+
+		return dstFile.Close()
 	})
+}
+
+// countDirFiles counts regular files and total size in a directory tree.
+func countDirFiles(dir string) (int64, int64, error) {
+	var count, totalSize int64
+	err := filepath.Walk(dir, func(_ string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() {
+			count++
+			totalSize += info.Size()
+		}
+		return nil
+	})
+	return count, totalSize, err
 }
 
 // Download fetches and caches a snapshot tarball (does not extract).
@@ -468,10 +501,13 @@ func (s *svc) Extract(ctx context.Context, opts ExtractOptions) error {
 	}
 
 	// Disk space pre-check for extraction
+	// We need space for both the temp extraction AND the final copy, so use 2x the
+	// estimated extraction size as the requirement.
 	progress(PhaseExtract, 0, -1, "Checking disk space...")
 	if tarballInfo, err := os.Stat(cachedTarball); err == nil {
 		// lz4 typical compression ratio ~3-4x for blockchain data
-		estimatedSize := tarballInfo.Size() * 4
+		// Need space for temp dir + final target dir simultaneously during copy
+		estimatedSize := tarballInfo.Size() * 8
 		if err := checkDiskSpace(opts.TargetDir, estimatedSize); err != nil {
 			return fmt.Errorf("extraction disk space check: %w", err)
 		}
@@ -506,6 +542,12 @@ func (s *svc) Extract(ctx context.Context, opts ExtractOptions) error {
 		return fmt.Errorf("extracted snapshot missing data/ directory")
 	}
 
+	// Count files in extracted source for post-copy verification
+	srcFileCount, srcTotalSize, err := countDirFiles(extractedDataDir)
+	if err != nil {
+		return fmt.Errorf("count extracted files: %w", err)
+	}
+
 	// Prepare target directory (clear existing contents except priv_validator_state.json)
 	if err := prepareDataDir(opts.TargetDir); err != nil {
 		return fmt.Errorf("prepare target dir: %w", err)
@@ -513,7 +555,21 @@ func (s *svc) Extract(ctx context.Context, opts ExtractOptions) error {
 
 	// Copy extracted data to target
 	if err := copyDir(extractedDataDir, opts.TargetDir); err != nil {
-		return fmt.Errorf("copy to target: %w", err)
+		// Copy failed (likely disk full) — clean up partial data to avoid corrupt state
+		_ = prepareDataDir(opts.TargetDir)
+		return fmt.Errorf("copy to target (disk may be full): %w", err)
+	}
+
+	// Post-copy verification: ensure all files were copied completely
+	dstFileCount, dstTotalSize, err := countDirFiles(opts.TargetDir)
+	if err != nil {
+		_ = prepareDataDir(opts.TargetDir)
+		return fmt.Errorf("verify extracted files: %w", err)
+	}
+	if dstFileCount < srcFileCount || dstTotalSize < srcTotalSize {
+		_ = prepareDataDir(opts.TargetDir)
+		return fmt.Errorf("extraction incomplete: expected %d files (%s) but got %d files (%s) — disk may be full",
+			srcFileCount, formatBytesHuman(srcTotalSize), dstFileCount, formatBytesHuman(dstTotalSize))
 	}
 
 	// Restore priv_validator_state.json if it was backed up

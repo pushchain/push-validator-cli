@@ -76,6 +76,9 @@ func (c *httpClient) RemoteStatus(ctx context.Context, baseURL string) (Status, 
     resp, err := c.http.Do(req)
     if err != nil { return Status{}, err }
     defer func() { _ = resp.Body.Close() }()
+    if resp.StatusCode != http.StatusOK {
+        return Status{}, fmt.Errorf("remote RPC returned HTTP %d", resp.StatusCode)
+    }
     var payload struct {
         Result struct {
             NodeInfo struct{
@@ -105,6 +108,9 @@ func (c *httpClient) Peers(ctx context.Context) ([]Peer, error) {
     resp, err := c.http.Do(req)
     if err != nil { return nil, err }
     defer func() { _ = resp.Body.Close() }()
+    if resp.StatusCode != http.StatusOK {
+        return nil, fmt.Errorf("remote RPC returned HTTP %d", resp.StatusCode)
+    }
     var payload struct {
         Result struct {
             Peers []struct {

@@ -7,3 +7,4 @@ scripts/build/pchaind
 coverage.out
 coverage.html
 *.out
+CLAUDE.md
