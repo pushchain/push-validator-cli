@@ -439,10 +439,10 @@ func (s *svc) Register(ctx context.Context, args RegisterArgs) (string, error) {
 		"pubkey":                     json.RawMessage(strings.TrimSpace(string(pubJSON))),
 		"amount":                     fmt.Sprintf("%s%s", args.Amount, s.opts.Denom),
 		"moniker":                    args.Moniker,
-		"identity":                   "",
-		"website":                    "",
-		"security":                   "",
-		"details":                    "Push Chain Validator",
+		"identity":                   args.Identity,
+		"website":                    args.Website,
+		"security":                   args.Security,
+		"details":                    valueOr(args.Details, "Push Chain Validator"),
 		"commission-rate":            valueOr(args.CommissionRate, "0.10"),
 		"commission-max-rate":        "0.20",
 		"commission-max-change-rate": "0.01",
@@ -552,6 +552,71 @@ func (s *svc) Unjail(ctx context.Context, keyName string) (string, error) {
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		// Try to extract a clean reason
+		msg := extractErrorLine(string(out))
+		if msg == "" {
+			msg = err.Error()
+		}
+		return "", errors.New(msg)
+	}
+
+	// Find txhash
+	lines := strings.Split(string(out), "\n")
+	for _, ln := range lines {
+		if strings.Contains(ln, "txhash:") {
+			parts := strings.SplitN(ln, "txhash:", 2)
+			if len(parts) == 2 {
+				return strings.TrimSpace(parts[1]), nil
+			}
+		}
+	}
+	return "", errors.New("transaction submitted; txhash not found in output")
+}
+
+// EditValidator submits an edit-validator transaction to update validator description fields
+func (s *svc) EditValidator(ctx context.Context, args EditValidatorArgs) (string, error) {
+	if s.opts.BinPath == "" {
+		s.opts.BinPath = "pchaind"
+	}
+	if args.KeyName == "" {
+		return "", errors.New("key name required")
+	}
+
+	remote := fmt.Sprintf("https://%s", s.opts.GenesisDomain)
+
+	cmdArgs := []string{
+		"tx", "staking", "edit-validator",
+		"--from", args.KeyName,
+		"--chain-id", s.opts.ChainID,
+		"--keyring-backend", s.opts.Keyring,
+		"--home", s.opts.HomeDir,
+		"--node", remote,
+		"--gas=auto", "--gas-adjustment=1.3", fmt.Sprintf("--gas-prices=1000000000%s", s.opts.Denom),
+		"--yes",
+	}
+
+	// Only include flags for non-empty fields
+	if args.Moniker != "" {
+		cmdArgs = append(cmdArgs, "--new-moniker", args.Moniker)
+	}
+	if args.Website != "" {
+		cmdArgs = append(cmdArgs, "--website", args.Website)
+	}
+	if args.Details != "" {
+		cmdArgs = append(cmdArgs, "--details", args.Details)
+	}
+	if args.Identity != "" {
+		cmdArgs = append(cmdArgs, "--identity", args.Identity)
+	}
+	if args.Security != "" {
+		cmdArgs = append(cmdArgs, "--security-contact", args.Security)
+	}
+
+	ctxTimeout, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+
+	cmd := commandContext(ctxTimeout, s.opts.BinPath, cmdArgs...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
 		msg := extractErrorLine(string(out))
 		if msg == "" {
 			msg = err.Error()

@@ -21,17 +21,31 @@ type Service interface {
     Balance(ctx context.Context, addr string) (string, error) // denom string for now
     Register(ctx context.Context, args RegisterArgs) (string, error) // returns tx hash
     Unjail(ctx context.Context, keyName string) (string, error) // returns tx hash
+    EditValidator(ctx context.Context, args EditValidatorArgs) (string, error) // returns tx hash
     WithdrawRewards(ctx context.Context, validatorAddr string, keyName string, includeCommission bool) (string, error) // returns tx hash
     Delegate(ctx context.Context, args DelegateArgs) (string, error) // returns tx hash
     Vote(ctx context.Context, args VoteArgs) (string, error) // returns tx hash
 }
 
 type RegisterArgs struct {
-    Moniker string
-    CommissionRate string
+    Moniker           string
+    CommissionRate    string
     MinSelfDelegation string
-    Amount string
-    KeyName string
+    Amount            string
+    KeyName           string
+    Website           string // optional validator website URL
+    Details           string // optional validator description
+    Identity          string // optional Keybase 16-digit identity
+    Security          string // optional security contact email
+}
+
+type EditValidatorArgs struct {
+    KeyName  string
+    Moniker  string // optional, empty = no change
+    Website  string // optional
+    Details  string // optional
+    Identity string // optional
+    Security string // optional
 }
 
 type DelegateArgs struct {

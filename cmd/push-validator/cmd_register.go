@@ -36,6 +36,11 @@ type registrationInputs struct {
 	ImportMnemonic string
 	CommissionRate string
 	StakeAmount    string
+	UseSavedKey    bool   // true when user picks "Use saved wallet"
+	Website        string // optional validator website URL
+	Details        string // optional validator description
+	Identity       string // optional Keybase 16-digit identity
+	Security       string // optional security contact email
 }
 
 // collectRegistrationInputs prompts for registration parameters interactively.
@@ -44,11 +49,17 @@ func collectRegistrationInputs(d *Deps, defaults registrationInputs) (registrati
 	result := defaults
 	prompter := d.Prompter
 
-	// 1. Wallet choice FIRST
-	result.ImportMnemonic = promptWalletChoiceWith(prompter)
+	// 1. Wallet choice FIRST — detect if a saved key exists
+	savedKeyExists := keyExistsWithRunner(d.Cfg, defaults.KeyName, d.Runner)
+	mnemonic, useSaved := promptWalletChoiceWith(prompter, savedKeyExists)
+	result.ImportMnemonic = mnemonic
+	result.UseSavedKey = useSaved
 
-	// 2. If NOT importing (create new), ask for key name
-	if result.ImportMnemonic == "" {
+	// 2. If user chose "Use saved wallet", skip key name prompt
+	if useSaved {
+		// Keep default key name; skip creation/import
+	} else if result.ImportMnemonic == "" {
+		// Create new wallet — ask for key name
 		input, err := prompter.ReadLine(fmt.Sprintf("Enter key name for validator (default: %s): ", defaults.KeyName))
 		if err == nil && input != "" {
 			result.KeyName = input
@@ -84,6 +95,20 @@ func collectRegistrationInputs(d *Deps, defaults registrationInputs) (registrati
 		}
 	}
 
+	// 4. Optional validator description fields
+	if website, err := prompter.ReadLine("Enter validator website URL (optional, press ENTER to skip): "); err == nil && website != "" {
+		result.Website = website
+	}
+	if details, err := prompter.ReadLine("Enter validator description (optional, press ENTER to skip): "); err == nil && details != "" {
+		result.Details = details
+	}
+	if security, err := prompter.ReadLine("Enter security contact email (optional, press ENTER to skip): "); err == nil && security != "" {
+		result.Security = security
+	}
+	if identity, err := prompter.ReadLine("Enter Keybase identity for logo (optional, 16-digit ID, press ENTER to skip): "); err == nil && identity != "" {
+		result.Identity = identity
+	}
+
 	return result, nil
 }
 
@@ -107,26 +132,42 @@ func promptCommissionRate(prompter Prompter, defaultRate string) string {
 	}
 }
 
-// promptWalletChoiceWith prompts the user to choose between creating a new wallet or importing.
-// Returns the mnemonic if user chooses to import, empty string otherwise.
-func promptWalletChoiceWith(prompter Prompter) string {
+// promptWalletChoiceWith prompts the user to choose between creating a new wallet, importing, or using a saved key.
+// Returns (mnemonic, useSaved). If useSaved is true the caller should skip key creation.
+func promptWalletChoiceWith(prompter Prompter, savedKeyExists bool) (string, bool) {
 	fmt.Println()
 	fmt.Println("Wallet Setup")
 	fmt.Println("  [1] Create new wallet (generates new recovery phrase)")
 	fmt.Println("  [2] Import existing wallet (use your recovery phrase)")
+	if savedKeyExists {
+		fmt.Println("  [3] Use saved wallet (use your existing wallet)")
+	}
 	fmt.Println()
+
+	validChoices := map[string]bool{"": true, "1": true, "2": true}
+	if savedKeyExists {
+		validChoices["3"] = true
+	}
 
 	var choice string
 	for {
 		choice, _ = prompter.ReadLine("Choose option [1]: ")
-		if choice == "" || choice == "1" || choice == "2" {
+		if validChoices[choice] {
 			break
 		}
-		fmt.Println("Invalid option. Please enter 1 or 2.")
+		if savedKeyExists {
+			fmt.Println("Invalid option. Please enter 1, 2, or 3.")
+		} else {
+			fmt.Println("Invalid option. Please enter 1 or 2.")
+		}
+	}
+
+	if choice == "3" && savedKeyExists {
+		return "", true
 	}
 
 	if choice != "2" {
-		return ""
+		return "", false
 	}
 
 	for {
@@ -135,7 +176,7 @@ func promptWalletChoiceWith(prompter Prompter) string {
 
 		mnemonic, err := prompter.ReadLine("> ")
 		if err != nil {
-			return ""
+			return "", false
 		}
 
 		// Normalize the mnemonic
@@ -149,7 +190,7 @@ func promptWalletChoiceWith(prompter Prompter) string {
 		}
 
 		fmt.Println("Mnemonic format validated")
-		return mnemonic
+		return mnemonic, false
 	}
 }
 
@@ -439,13 +480,26 @@ func handleRegisterValidator(d *Deps) error {
 		if err != nil {
 			return err
 		}
+		// If user chose "Use saved wallet", treat like existing key (no import, no create)
+		importMnemonic := inputs.ImportMnemonic
+		if inputs.UseSavedKey {
+			importMnemonic = ""
+		}
 		// Interactive mode - let user choose stake amount
 		// Pass empty string to trigger the interactive stake selection prompt
-		return runRegisterValidatorWithDeps(d, cfg, inputs.Moniker, inputs.KeyName, "", inputs.CommissionRate, inputs.ImportMnemonic)
+		return runRegisterValidatorWithDeps(d, cfg, inputs, "", inputs.CommissionRate, importMnemonic)
 	}
 	// JSON mode or non-interactive - use default/env amount
 	commissionRate := getenvDefault("COMMISSION_RATE", defaultCommissionRate)
-	return runRegisterValidatorWithDeps(d, cfg, moniker, keyName, defaultAmount, commissionRate, "")
+	nonInteractiveInputs := registrationInputs{
+		Moniker:  moniker,
+		KeyName:  keyName,
+		Website:  getenvDefault("VALIDATOR_WEBSITE", ""),
+		Details:  getenvDefault("VALIDATOR_DETAILS", ""),
+		Identity: getenvDefault("VALIDATOR_IDENTITY", ""),
+		Security: getenvDefault("VALIDATOR_SECURITY", ""),
+	}
+	return runRegisterValidatorWithDeps(d, cfg, nonInteractiveInputs, defaultAmount, commissionRate, "")
 }
 
 // keyExistsWithRunner checks if a key with the given name already exists in the keyring
@@ -461,7 +515,9 @@ func keyExistsWithRunner(cfg config.Config, keyName string, runner CommandRunner
 
 // runRegisterValidatorWithDeps is the testable version that accepts
 // injected dependencies. If d is nil, production dependencies are created.
-func runRegisterValidatorWithDeps(d *Deps, cfg config.Config, moniker, keyName, amount, commissionRate, importMnemonic string) error {
+func runRegisterValidatorWithDeps(d *Deps, cfg config.Config, inputs registrationInputs, amount, commissionRate, importMnemonic string) error {
+	moniker := inputs.Moniker
+	keyName := inputs.KeyName
 	// Use injected deps or create production ones
 	var v validator.Service
 	var prompter Prompter
@@ -605,7 +661,17 @@ func runRegisterValidatorWithDeps(d *Deps, cfg config.Config, moniker, keyName, 
 	// Create fresh context for registration transaction (independent of earlier operations)
 	regCtx, regCancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer regCancel()
-	txHash, err := v.Register(regCtx, validator.RegisterArgs{Moniker: moniker, Amount: stake, KeyName: keyName, CommissionRate: commissionRate, MinSelfDelegation: defaultMinSelfDelegation})
+	txHash, err := v.Register(regCtx, validator.RegisterArgs{
+		Moniker:           moniker,
+		Amount:            stake,
+		KeyName:           keyName,
+		CommissionRate:    commissionRate,
+		MinSelfDelegation: defaultMinSelfDelegation,
+		Website:           inputs.Website,
+		Details:           inputs.Details,
+		Identity:          inputs.Identity,
+		Security:          inputs.Security,
+	})
 	if err != nil {
 		errMsg := err.Error()
 		// If validator already exists, treat as success (wallet was imported/created successfully)

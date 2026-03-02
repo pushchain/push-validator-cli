@@ -103,6 +103,8 @@ type mockValidator struct {
 	registerErr     error
 	unjailResult    string
 	unjailErr       error
+	editValResult   string
+	editValErr      error
 	withdrawResult  string
 	withdrawErr     error
 	delegateResult  string
@@ -133,6 +135,10 @@ func (m *mockValidator) Register(ctx context.Context, args validator.RegisterArg
 
 func (m *mockValidator) Unjail(ctx context.Context, keyName string) (string, error) {
 	return m.unjailResult, m.unjailErr
+}
+
+func (m *mockValidator) EditValidator(ctx context.Context, args validator.EditValidatorArgs) (string, error) {
+	return m.editValResult, m.editValErr
 }
 
 func (m *mockValidator) WithdrawRewards(ctx context.Context, validatorAddr string, keyName string, includeCommission bool) (string, error) {

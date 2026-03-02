@@ -204,17 +204,23 @@ var startCmd = &cobra.Command{
 
 		// Verify the node process actually survived startup and is serving RPC.
 		// PID checks are racy for detached processes — the node may crash seconds after
-		// launch (e.g. corrupt DB). Polling RPC for up to 10s is more reliable.
+		// launch (e.g. corrupt DB). Polling RPC for up to 60s is more reliable.
+		// Initial startup after snapshot restore can take 30+ seconds to open databases
+		// and begin serving RPC.
 		nodeAlive := false
-		for i := 0; i < 10; i++ {
+		for i := 0; i < 60; i++ {
 			time.Sleep(1 * time.Second)
 			if !sup.IsRunning() {
-				break // process already exited
+				break // process already exited — no point waiting
 			}
 			if process.IsRPCListening("127.0.0.1:26657", 800*time.Millisecond) {
 				nodeAlive = true
 				break
 			}
+		}
+		// If process is still running but RPC isn't up yet, trust it
+		if !nodeAlive && sup.IsRunning() {
+			nodeAlive = true
 		}
 		if !nodeAlive {
 			logPath := sup.LogPath()

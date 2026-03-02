@@ -892,7 +892,7 @@ func TestDownloadFile(t *testing.T) {
 		}
 
 		svc := &svc{http: mock}
-		err := svc.downloadFile(context.Background(), "http://example.com/file.txt", destPath, nil)
+		hash, err := svc.downloadFile(context.Background(), "http://example.com/file.txt", destPath, nil)
 		if err != nil {
 			t.Fatalf("downloadFile() error = %v", err)
 		}
@@ -901,6 +901,12 @@ func TestDownloadFile(t *testing.T) {
 		data, _ := os.ReadFile(destPath)
 		if string(data) != content {
 			t.Errorf("downloaded content = %q, want %q", string(data), content)
+		}
+
+		// Verify hash was computed during fresh download
+		expectedHash := computeSHA256([]byte(content))
+		if hash != expectedHash {
+			t.Errorf("downloadFile() hash = %q, want %q", hash, expectedHash)
 		}
 	})
 
@@ -923,7 +929,7 @@ func TestDownloadFile(t *testing.T) {
 		}
 
 		svc := &svc{http: mock}
-		err := svc.downloadFile(context.Background(), "http://example.com/file.txt", destPath, nil)
+		hash, err := svc.downloadFile(context.Background(), "http://example.com/file.txt", destPath, nil)
 		if err != nil {
 			t.Fatalf("downloadFile() error = %v", err)
 		}
@@ -932,6 +938,11 @@ func TestDownloadFile(t *testing.T) {
 		data, _ := os.ReadFile(destPath)
 		if string(data) != "test content" {
 			t.Errorf("resumed content = %q, want %q", string(data), "test content")
+		}
+
+		// Verify hash is empty for resumed downloads
+		if hash != "" {
+			t.Errorf("downloadFile() hash = %q, want empty for resumed download", hash)
 		}
 	})
 
@@ -964,7 +975,7 @@ func TestDownloadFile(t *testing.T) {
 		customMock2 := &customHTTPDoer{doFunc: doFunc}
 
 		svc := &svc{http: customMock2}
-		err := svc.downloadFile(context.Background(), "http://example.com/file.txt", destPath, nil)
+		hash, err := svc.downloadFile(context.Background(), "http://example.com/file.txt", destPath, nil)
 		if err != nil {
 			t.Fatalf("downloadFile() error = %v", err)
 		}
@@ -977,6 +988,12 @@ func TestDownloadFile(t *testing.T) {
 		data, _ := os.ReadFile(destPath)
 		if string(data) != "full content" {
 			t.Errorf("content = %q, want %q", string(data), "full content")
+		}
+
+		// Verify hash was computed (416 triggers fresh re-download)
+		expectedHash := computeSHA256([]byte("full content"))
+		if hash != expectedHash {
+			t.Errorf("downloadFile() hash = %q, want %q", hash, expectedHash)
 		}
 	})
 }

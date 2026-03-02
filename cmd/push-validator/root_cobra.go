@@ -156,6 +156,7 @@ func init() {
 		fmt.Fprintln(w, c.FormatCommandAligned("validators", "List validators", cmdWidth))
 		fmt.Fprintln(w, c.FormatCommandAligned("balance [address]", "Check account balance", cmdWidth))
 		fmt.Fprintln(w, c.FormatCommandAligned("register-validator", "Register this node as a validator", cmdWidth))
+		fmt.Fprintln(w, c.FormatCommandAligned("edit-validator", "Edit validator profile", cmdWidth))
 		fmt.Fprintln(w, c.FormatCommandAligned("increase-stake", "Increase validator stake", cmdWidth))
 		fmt.Fprintln(w, c.FormatCommandAligned("unjail", "Restore jailed validator to active status", cmdWidth))
 		fmt.Fprintln(w, c.FormatCommandAligned("withdraw-rewards", "Withdraw rewards and commission", cmdWidth))
@@ -278,11 +279,22 @@ func init() {
 	balanceCmd.Flags().StringVar(&balAddr, "address", "", "Account address")
 	rootCmd.AddCommand(balanceCmd)
 	// register-validator: interactive flow with optional flag overrides
-	regCmd := &cobra.Command{Use: "register-validator", Short: "Register this node as validator", RunE: func(cmd *cobra.Command, args []string) error {
+	regCmd := &cobra.Command{Use: "register-validator", Aliases: []string{"register"}, Short: "Register this node as validator", RunE: func(cmd *cobra.Command, args []string) error {
 		return handleRegisterValidator(newDeps())
 	}}
 	regCmd.Flags().BoolVar(&flagRegisterCheckOnly, "check-only", false, "Exit after reporting validator registration status")
 	rootCmd.AddCommand(regCmd)
+
+	// edit-validator command
+	editValCmd := &cobra.Command{
+		Use:     "edit-validator",
+		Aliases: []string{"edit"},
+		Short:   "Edit validator profile (moniker, website, identity, etc.)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return handleEditValidator(newDeps())
+		},
+	}
+	rootCmd.AddCommand(editValCmd)
 
 	// unjail command
 	unjailCmd := &cobra.Command{

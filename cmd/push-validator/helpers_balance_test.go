@@ -196,6 +196,10 @@ func (m *balanceIncrementingValidator) Unjail(ctx context.Context, keyName strin
 	return "", nil
 }
 
+func (m *balanceIncrementingValidator) EditValidator(ctx context.Context, args validator.EditValidatorArgs) (string, error) {
+	return "", nil
+}
+
 func (m *balanceIncrementingValidator) WithdrawRewards(ctx context.Context, validatorAddr string, keyName string, includeCommission bool) (string, error) {
 	return "", nil
 }

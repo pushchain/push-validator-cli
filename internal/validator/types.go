@@ -30,6 +30,10 @@ type MyValidatorInfo struct {
 	IsValidator                  bool
 	Address                      string
 	Moniker                      string
+	Website                      string
+	Details                      string
+	SecurityContact              string
+	Identity                     string
 	Status                       string
 	VotingPower                  int64
 	VotingPct                    float64 // Percentage of total voting power [0,1]

@@ -1044,8 +1044,8 @@ func TestLogViewerMinDimensions(t *testing.T) {
 		t.Errorf("MinWidth should be 40, got %d", lv.MinWidth())
 	}
 
-	if lv.MinHeight() != 13 {
-		t.Errorf("MinHeight should be 13, got %d", lv.MinHeight())
+	if lv.MinHeight() != 7 {
+		t.Errorf("MinHeight should be 7, got %d", lv.MinHeight())
 	}
 }
 

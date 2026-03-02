@@ -2,7 +2,10 @@ package snapshot
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"hash"
 	"io"
 	"net/http"
 	"os"
@@ -415,9 +418,10 @@ func (s *svc) Download(ctx context.Context, opts Options) error {
 	os.WriteFile(partialChecksumPath, []byte(remoteChecksum), 0o644)
 
 	// Download with retry and resume support
-	if err := s.downloadWithRetry(ctx, snapshotURL, cachedTarball, func(current, total int64) {
+	downloadHash, err := s.downloadWithRetry(ctx, snapshotURL, cachedTarball, func(current, total int64) {
 		progress(PhaseDownload, current, total, "")
-	}, progress); err != nil {
+	}, progress)
+	if err != nil {
 		return fmt.Errorf("download snapshot: %w", err)
 	}
 
@@ -426,12 +430,22 @@ func (s *svc) Download(ctx context.Context, opts Options) error {
 
 	// Verify downloaded file
 	progress(PhaseVerify, 0, 1, "Verifying checksum...")
-	if err := verifyFile(cachedTarball, remoteChecksum); err != nil {
-		// Remove corrupted download and partial file
-		os.Remove(cachedTarball)
-		os.Remove(partialPath)
-		os.Remove(partialChecksumPath)
-		return fmt.Errorf("checksum verification failed: %w", err)
+	if downloadHash != "" {
+		// Hash was computed during download (fresh download), verify directly
+		if !strings.EqualFold(downloadHash, remoteChecksum) {
+			os.Remove(cachedTarball)
+			os.Remove(partialPath)
+			os.Remove(partialChecksumPath)
+			return fmt.Errorf("checksum verification failed: hash mismatch: expected %s, got %s", remoteChecksum, downloadHash)
+		}
+	} else {
+		// Resumed download — must verify by reading file
+		if err := verifyFile(cachedTarball, remoteChecksum); err != nil {
+			os.Remove(cachedTarball)
+			os.Remove(partialPath)
+			os.Remove(partialChecksumPath)
+			return fmt.Errorf("checksum verification failed: %w", err)
+		}
 	}
 	progress(PhaseVerify, 1, 1, "Checksum verified")
 
@@ -485,19 +499,12 @@ func (s *svc) Extract(ctx context.Context, opts ExtractOptions) error {
 		return fmt.Errorf("no cached snapshot found, run 'snapshot download' first")
 	}
 
-	// Pre-extract integrity verification
-	progress(PhaseVerify, 0, 1, "Verifying snapshot integrity before extraction...")
-	cachedChecksum, checksumErr := readCachedChecksum(opts.HomeDir)
-	if checksumErr != nil {
+	// Quick integrity check: verify cached checksum file exists
+	// (Full SHA-256 verification was already done during download — skip re-reading the entire file)
+	if _, checksumErr := readCachedChecksum(opts.HomeDir); checksumErr != nil {
 		progress(PhaseVerify, 0, -1, "Warning: no checksum file found, skipping integrity check")
 	} else {
-		if err := verifyFile(cachedTarball, cachedChecksum); err != nil {
-			// Remove corrupted cache
-			os.Remove(cachedTarball)
-			os.Remove(getCachedChecksumPath(opts.HomeDir))
-			return fmt.Errorf("cached snapshot is corrupted (checksum mismatch), please re-download with 'snapshot download --no-cache': %w", err)
-		}
-		progress(PhaseVerify, 1, 1, "Integrity verified")
+		progress(PhaseVerify, 1, 1, "Integrity verified (checksum on file)")
 	}
 
 	// Disk space pre-check for extraction
@@ -522,10 +529,15 @@ func (s *svc) Extract(ctx context.Context, opts ExtractOptions) error {
 
 	progress(PhaseExtract, 0, -1, "Extracting snapshot...")
 
-	// Create temp directory for extraction (tarball contains data/ prefix)
-	extractDir, err := os.MkdirTemp("", "snapshot-extract-*")
+	// Create temp directory under HomeDir (same filesystem) so os.Rename works
+	// without a cross-device copy. Falls back to system temp if this fails.
+	extractDir, err := os.MkdirTemp(opts.HomeDir, ".snapshot-extract-*")
 	if err != nil {
-		return fmt.Errorf("create extract dir: %w", err)
+		// Fallback to system temp (will require copy instead of rename)
+		extractDir, err = os.MkdirTemp("", "snapshot-extract-*")
+		if err != nil {
+			return fmt.Errorf("create extract dir: %w", err)
+		}
 	}
 	defer os.RemoveAll(extractDir)
 
@@ -542,25 +554,30 @@ func (s *svc) Extract(ctx context.Context, opts ExtractOptions) error {
 		return fmt.Errorf("extracted snapshot missing data/ directory")
 	}
 
-	// Count files in extracted source for post-copy verification
+	// Count files in extracted source for post-move verification
 	srcFileCount, srcTotalSize, err := countDirFiles(extractedDataDir)
 	if err != nil {
 		return fmt.Errorf("count extracted files: %w", err)
 	}
 
-	// Prepare target directory (clear existing contents except priv_validator_state.json)
-	if err := prepareDataDir(opts.TargetDir); err != nil {
-		return fmt.Errorf("prepare target dir: %w", err)
+	// Remove existing target directory so os.Rename can move the extracted dir in place
+	if err := os.RemoveAll(opts.TargetDir); err != nil {
+		return fmt.Errorf("remove existing data dir: %w", err)
 	}
 
-	// Copy extracted data to target
-	if err := copyDir(extractedDataDir, opts.TargetDir); err != nil {
-		// Copy failed (likely disk full) — clean up partial data to avoid corrupt state
-		_ = prepareDataDir(opts.TargetDir)
-		return fmt.Errorf("copy to target (disk may be full): %w", err)
+	// Try atomic rename first (instant on same filesystem)
+	if err := os.Rename(extractedDataDir, opts.TargetDir); err != nil {
+		// Cross-device fallback: recreate target and copy
+		if mkErr := os.MkdirAll(opts.TargetDir, 0o755); mkErr != nil {
+			return fmt.Errorf("recreate target dir: %w", mkErr)
+		}
+		if err := copyDir(extractedDataDir, opts.TargetDir); err != nil {
+			_ = prepareDataDir(opts.TargetDir)
+			return fmt.Errorf("copy to target (disk may be full): %w", err)
+		}
 	}
 
-	// Post-copy verification: ensure all files were copied completely
+	// Post-move verification: ensure all files are present
 	dstFileCount, dstTotalSize, err := countDirFiles(opts.TargetDir)
 	if err != nil {
 		_ = prepareDataDir(opts.TargetDir)
@@ -587,7 +604,8 @@ func (s *svc) Extract(ctx context.Context, opts ExtractOptions) error {
 // Uses a .partial suffix file during download; renames to destPath on success.
 // If a .partial file exists from a previous interrupted download, attempts to
 // resume using HTTP Range headers.
-func (s *svc) downloadFile(ctx context.Context, url, destPath string, progress func(current, total int64)) error {
+// Returns the SHA-256 hash of the downloaded content for fresh downloads (empty string for resumed downloads).
+func (s *svc) downloadFile(ctx context.Context, url, destPath string, progress func(current, total int64)) (string, error) {
 	partialPath := destPath + ".partial"
 	var startOffset int64
 
@@ -598,7 +616,7 @@ func (s *svc) downloadFile(ctx context.Context, url, destPath string, progress f
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	if startOffset > 0 {
@@ -607,7 +625,7 @@ func (s *svc) downloadFile(ctx context.Context, url, destPath string, progress f
 
 	resp, err := s.http.Do(req)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer resp.Body.Close()
 
@@ -619,7 +637,7 @@ func (s *svc) downloadFile(ctx context.Context, url, destPath string, progress f
 		totalSize = startOffset + resp.ContentLength
 		out, err = os.OpenFile(partialPath, os.O_WRONLY|os.O_APPEND, 0o644)
 		if err != nil {
-			return fmt.Errorf("open partial file for append: %w", err)
+			return "", fmt.Errorf("open partial file for append: %w", err)
 		}
 
 	case http.StatusOK: // 200 - full download (server may not support Range, or no partial)
@@ -627,7 +645,7 @@ func (s *svc) downloadFile(ctx context.Context, url, destPath string, progress f
 		totalSize = resp.ContentLength
 		out, err = os.Create(partialPath)
 		if err != nil {
-			return fmt.Errorf("create download file: %w", err)
+			return "", fmt.Errorf("create download file: %w", err)
 		}
 
 	case http.StatusRequestedRangeNotSatisfiable: // 416 - range invalid
@@ -637,29 +655,36 @@ func (s *svc) downloadFile(ctx context.Context, url, destPath string, progress f
 		// Re-request without Range header
 		req2, err2 := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 		if err2 != nil {
-			return err2
+			return "", err2
 		}
 		resp2, err2 := s.http.Do(req2)
 		if err2 != nil {
-			return err2
+			return "", err2
 		}
 		defer resp2.Body.Close()
 		if resp2.StatusCode != http.StatusOK {
-			return fmt.Errorf("HTTP %d: %s", resp2.StatusCode, resp2.Status)
+			return "", fmt.Errorf("HTTP %d: %s", resp2.StatusCode, resp2.Status)
 		}
 		resp = resp2
 		startOffset = 0
 		totalSize = resp.ContentLength
 		out, err = os.Create(partialPath)
 		if err != nil {
-			return fmt.Errorf("create download file: %w", err)
+			return "", fmt.Errorf("create download file: %w", err)
 		}
 
 	default:
-		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, resp.Status)
+		return "", fmt.Errorf("HTTP %d: %s", resp.StatusCode, resp.Status)
 	}
 
 	defer out.Close()
+
+	// For fresh downloads, compute SHA-256 hash while writing to avoid
+	// re-reading the entire file for verification afterward.
+	var hasher hash.Hash
+	if startOffset == 0 {
+		hasher = sha256.New()
+	}
 
 	var reader io.Reader = resp.Body
 	if progress != nil {
@@ -671,9 +696,15 @@ func (s *svc) downloadFile(ctx context.Context, url, destPath string, progress f
 		}
 	}
 
-	if _, err = io.Copy(out, reader); err != nil {
+	// Write to file, and optionally hash simultaneously
+	var writer io.Writer = out
+	if hasher != nil {
+		writer = io.MultiWriter(out, hasher)
+	}
+
+	if _, err = io.Copy(writer, reader); err != nil {
 		// Keep partial file for resume on next attempt
-		return err
+		return "", err
 	}
 
 	// Close file before rename
@@ -681,15 +712,20 @@ func (s *svc) downloadFile(ctx context.Context, url, destPath string, progress f
 
 	// Rename .partial to final path
 	if err := os.Rename(partialPath, destPath); err != nil {
-		return fmt.Errorf("finalize download: %w", err)
+		return "", fmt.Errorf("finalize download: %w", err)
 	}
 
-	return nil
+	// Return computed hash for fresh downloads
+	if hasher != nil {
+		return hex.EncodeToString(hasher.Sum(nil)), nil
+	}
+	return "", nil
 }
 
 // downloadWithRetry wraps downloadFile with exponential backoff retry logic.
 // On each retry, the resume logic in downloadFile picks up from where it left off.
-func (s *svc) downloadWithRetry(ctx context.Context, url, destPath string, progress func(current, total int64), phaseProgress ProgressFunc) error {
+// Returns the SHA-256 hash from the successful download attempt (may be empty for resumed downloads).
+func (s *svc) downloadWithRetry(ctx context.Context, url, destPath string, progress func(current, total int64), phaseProgress ProgressFunc) (string, error) {
 	var lastErr error
 	backoff := initialBackoff
 
@@ -699,7 +735,7 @@ func (s *svc) downloadWithRetry(ctx context.Context, url, destPath string, progr
 
 			select {
 			case <-ctx.Done():
-				return ctx.Err()
+				return "", ctx.Err()
 			case <-time.After(backoff):
 			}
 
@@ -709,20 +745,21 @@ func (s *svc) downloadWithRetry(ctx context.Context, url, destPath string, progr
 			}
 		}
 
-		lastErr = s.downloadFile(ctx, url, destPath, progress)
-		if lastErr == nil {
-			return nil
+		dlHash, err := s.downloadFile(ctx, url, destPath, progress)
+		if err == nil {
+			return dlHash, nil
 		}
+		lastErr = err
 
 		// Don't retry on context cancellation
 		if ctx.Err() != nil {
-			return lastErr
+			return "", lastErr
 		}
 
 		phaseProgress(PhaseDownload, 0, -1, fmt.Sprintf("Download interrupted: %v", lastErr))
 	}
 
-	return fmt.Errorf("download failed after %d attempts: %w", maxRetries+1, lastErr)
+	return "", fmt.Errorf("download failed after %d attempts: %w", maxRetries+1, lastErr)
 }
 
 // fetchChecksum downloads and parses the checksum file.

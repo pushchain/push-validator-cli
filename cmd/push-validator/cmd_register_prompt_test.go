@@ -65,23 +65,29 @@ func TestPromptCommissionRate_BoundaryValues(t *testing.T) {
 
 func TestPromptWalletChoiceWith_CreateNew(t *testing.T) {
 	p := &mockPrompter{responses: []string{"1"}}
-	mnemonic := promptWalletChoiceWith(p)
+	mnemonic, useSaved := promptWalletChoiceWith(p, false)
 	if mnemonic != "" {
 		t.Errorf("expected empty mnemonic for create new, got %s", mnemonic)
+	}
+	if useSaved {
+		t.Error("expected useSaved=false for create new")
 	}
 }
 
 func TestPromptWalletChoiceWith_DefaultOption(t *testing.T) {
 	p := &mockPrompter{responses: []string{""}}
-	mnemonic := promptWalletChoiceWith(p)
+	mnemonic, useSaved := promptWalletChoiceWith(p, false)
 	if mnemonic != "" {
 		t.Errorf("expected empty mnemonic for default, got %s", mnemonic)
+	}
+	if useSaved {
+		t.Error("expected useSaved=false for default")
 	}
 }
 
 func TestPromptWalletChoiceWith_ImportInvalidMnemonic(t *testing.T) {
 	p := &mockPrompter{responses: []string{"2", "not a valid mnemonic"}}
-	mnemonic := promptWalletChoiceWith(p)
+	mnemonic, _ := promptWalletChoiceWith(p, false)
 	if mnemonic != "" {
 		t.Errorf("expected empty mnemonic for invalid, got %s", mnemonic)
 	}
@@ -94,9 +100,35 @@ func TestPromptWalletChoiceWith_ImportValidMnemonic(t *testing.T) {
 		t.Skipf("ValidateMnemonic rejects test mnemonic: %v", err)
 	}
 	p := &mockPrompter{responses: []string{"2", validMnemonic}}
-	mnemonic := promptWalletChoiceWith(p)
+	mnemonic, useSaved := promptWalletChoiceWith(p, false)
 	if mnemonic != validMnemonic {
 		t.Errorf("expected valid mnemonic back, got %s", mnemonic)
+	}
+	if useSaved {
+		t.Error("expected useSaved=false for import")
+	}
+}
+
+func TestPromptWalletChoiceWith_UseSavedWallet(t *testing.T) {
+	p := &mockPrompter{responses: []string{"3"}}
+	mnemonic, useSaved := promptWalletChoiceWith(p, true)
+	if mnemonic != "" {
+		t.Errorf("expected empty mnemonic for saved wallet, got %s", mnemonic)
+	}
+	if !useSaved {
+		t.Error("expected useSaved=true for option 3")
+	}
+}
+
+func TestPromptWalletChoiceWith_UseSavedNotShownWhenNoKey(t *testing.T) {
+	// Option 3 is invalid when no saved key exists — should loop then accept 1
+	p := &mockPrompter{responses: []string{"3", "1"}, interactive: true}
+	mnemonic, useSaved := promptWalletChoiceWith(p, false)
+	if mnemonic != "" {
+		t.Errorf("expected empty mnemonic, got %s", mnemonic)
+	}
+	if useSaved {
+		t.Error("expected useSaved=false when no saved key")
 	}
 }
 
@@ -240,8 +272,9 @@ func TestCollectRegistrationInputs_DefaultValues(t *testing.T) {
 	// Response 0: wallet choice → "" (default = create new)
 	// Response 1: key name prompt → "" (use default)
 	// Moniker prompt is skipped (not "" or "push-validator")
+	// Responses 2-5: description field prompts → "" (skip all)
 	d.Prompter = &mockPrompter{
-		responses:   []string{"", ""},
+		responses:   []string{"", "", "", "", "", ""},
 		interactive: true,
 	}
 
@@ -278,8 +311,9 @@ func TestCollectRegistrationInputs_CustomValues(t *testing.T) {
 	// Response 1: key name → "custom-key"
 	// Moniker IS "push-validator" so moniker prompt fires
 	// Response 2: moniker → "custom-moniker"
+	// Responses 3-6: description field prompts → "" (skip all)
 	d.Prompter = &mockPrompter{
-		responses:   []string{"", "custom-key", "custom-moniker"},
+		responses:   []string{"", "custom-key", "custom-moniker", "", "", "", ""},
 		interactive: true,
 	}
 
@@ -319,11 +353,12 @@ func TestCollectRegistrationInputs_KeyExists_UseExisting(t *testing.T) {
 	runner.outputs[binPath+" keys show my-key -a --keyring-backend "+cfg.KeyringBackend+" --home "+cfg.HomeDir] = []byte("push1existing\n")
 	d.Runner = runner
 
-	// Response 0: wallet choice → "" (create new)
+	// Response 0: wallet choice → "1" (create new — option 3 is available but user picks 1)
 	// Response 1: key name → "" (use default "my-key" which exists)
 	// Key exists branch: Response 2: enter different name → "" (use existing)
+	// Responses 3-6: description field prompts → "" (skip all)
 	d.Prompter = &mockPrompter{
-		responses:   []string{"", "", ""},
+		responses:   []string{"1", "", "", "", "", "", ""},
 		interactive: true,
 	}
 
@@ -365,11 +400,12 @@ func TestCollectRegistrationInputs_KeyExists_EnterNewName(t *testing.T) {
 	runner.errors[binPath+" keys show new-key -a --keyring-backend "+cfg.KeyringBackend+" --home "+cfg.HomeDir] = errMock
 	d.Runner = runner
 
-	// Response 0: wallet choice → "" (create new)
+	// Response 0: wallet choice → "1" (create new — key exists so option 3 shown, user picks 1)
 	// Response 1: key name → "" (use default "existing-key" which exists)
 	// Key exists: Response 2: enter different name → "new-key"
+	// Responses 3-6: description field prompts → "" (skip all)
 	d.Prompter = &mockPrompter{
-		responses:   []string{"", "", "new-key"},
+		responses:   []string{"1", "", "new-key", "", "", "", ""},
 		interactive: true,
 	}
 
@@ -407,11 +443,12 @@ func TestCollectRegistrationInputs_KeyExists_NewNameAlsoExists(t *testing.T) {
 	runner.outputs[binPath+" keys show also-exists -a --keyring-backend "+cfg.KeyringBackend+" --home "+cfg.HomeDir] = []byte("push1b\n")
 	d.Runner = runner
 
-	// Response 0: wallet choice → "" (create new)
+	// Response 0: wallet choice → "1" (create new — key exists so option 3 shown, user picks 1)
 	// Response 1: key name → "" (use default which exists)
 	// Key exists: Response 2: enter different name → "also-exists" (also exists)
+	// Responses 3-6: description field prompts → "" (skip all)
 	d.Prompter = &mockPrompter{
-		responses:   []string{"", "", "also-exists"},
+		responses:   []string{"1", "", "also-exists", "", "", "", ""},
 		interactive: true,
 	}
 

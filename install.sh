@@ -1152,6 +1152,10 @@ fi
 
 mkdir -p "$ROOT_DIR" "$INSTALL_BIN_DIR"
 
+# Ensure INSTALL_BIN_DIR is in PATH for this session
+# (non-interactive shells don't source ~/.bashrc, so push-validator may not be found)
+case ":$PATH:" in *":$INSTALL_BIN_DIR:"*) : ;; *) export PATH="$INSTALL_BIN_DIR:$PATH" ;; esac
+
 verbose "Installation paths:"
 verbose "  Root dir: $ROOT_DIR"
 verbose "  Bin dir: $INSTALL_BIN_DIR"
@@ -1188,6 +1192,17 @@ fi
 # - Always: installing cosmovisor (go install)
 GO_NEEDS_INSTALL=0
 GO_NEEDS_UPGRADE=0
+
+# Pre-check: ensure Go is in PATH if installed to common locations
+# (non-interactive shells don't source ~/.bashrc, so PATH may be missing)
+if ! command -v go >/dev/null 2>&1; then
+  if [[ -f "/usr/local/go/bin/go" ]]; then
+    export PATH="/usr/local/go/bin:$PATH"
+  elif [[ -f "$HOME/.local/go/bin/go" ]]; then
+    export PATH="$HOME/.local/go/bin:$PATH"
+  fi
+  hash -r 2>/dev/null || true
+fi
 
 if ! command -v go >/dev/null 2>&1; then
   GO_NEEDS_INSTALL=1

@@ -82,7 +82,7 @@ func TestRunRegisterValidatorWithDeps_EnsureKeyError_JSON(t *testing.T) {
 		d.Validator = &mockValidator{ensureKeyErr: fmt.Errorf("keyring locked")}
 	})
 
-	err := runRegisterValidatorWithDeps(d, d.Cfg, "myval", "mykey", "1500000000000000000", "0.10", "")
+	err := runRegisterValidatorWithDeps(d, d.Cfg, registrationInputs{Moniker: "myval", KeyName: "mykey"}, "1500000000000000000", "0.10", "")
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -113,7 +113,7 @@ func TestRunRegisterValidatorWithDeps_EnsureKeyError_Text(t *testing.T) {
 		d.Validator = &mockValidator{ensureKeyErr: fmt.Errorf("keyring locked")}
 	})
 
-	err := runRegisterValidatorWithDeps(d, d.Cfg, "myval", "mykey", "1500000000000000000", "0.10", "")
+	err := runRegisterValidatorWithDeps(d, d.Cfg, registrationInputs{Moniker: "myval", KeyName: "mykey"}, "1500000000000000000", "0.10", "")
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -138,7 +138,7 @@ func TestRunRegisterValidatorWithDeps_ImportKeyError_JSON(t *testing.T) {
 		d.Validator = &mockValidator{importKeyErr: fmt.Errorf("invalid mnemonic")}
 	})
 
-	err := runRegisterValidatorWithDeps(d, d.Cfg, "myval", "mykey", "1500000000000000000", "0.10", "word1 word2 word3 word4 word5 word6 word7 word8 word9 word10 word11 word12")
+	err := runRegisterValidatorWithDeps(d, d.Cfg, registrationInputs{Moniker: "myval", KeyName: "mykey"}, "1500000000000000000", "0.10", "word1 word2 word3 word4 word5 word6 word7 word8 word9 word10 word11 word12")
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -169,7 +169,7 @@ func TestRunRegisterValidatorWithDeps_ImportKeyError_Text(t *testing.T) {
 		d.Validator = &mockValidator{importKeyErr: fmt.Errorf("bad mnemonic format")}
 	})
 
-	err := runRegisterValidatorWithDeps(d, d.Cfg, "myval", "mykey", "1500000000000000000", "0.10", "some bad mnemonic")
+	err := runRegisterValidatorWithDeps(d, d.Cfg, registrationInputs{Moniker: "myval", KeyName: "mykey"}, "1500000000000000000", "0.10", "some bad mnemonic")
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -199,7 +199,7 @@ func TestRunRegisterValidatorWithDeps_RegistrationSuccess_JSON(t *testing.T) {
 		}
 	})
 
-	err := runRegisterValidatorWithDeps(d, d.Cfg, "myval", "mykey", "1500000000000000000", "0.10", "")
+	err := runRegisterValidatorWithDeps(d, d.Cfg, registrationInputs{Moniker: "myval", KeyName: "mykey"}, "1500000000000000000", "0.10", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -232,7 +232,7 @@ func TestRunRegisterValidatorWithDeps_RegistrationSuccess_Text(t *testing.T) {
 		}
 	})
 
-	err := runRegisterValidatorWithDeps(d, d.Cfg, "myval", "mykey", "1500000000000000000", "0.10", "")
+	err := runRegisterValidatorWithDeps(d, d.Cfg, registrationInputs{Moniker: "myval", KeyName: "mykey"}, "1500000000000000000", "0.10", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -259,7 +259,7 @@ func TestRunRegisterValidatorWithDeps_RegistrationError_JSON(t *testing.T) {
 		}
 	})
 
-	err := runRegisterValidatorWithDeps(d, d.Cfg, "myval", "mykey", "1500000000000000000", "0.10", "")
+	err := runRegisterValidatorWithDeps(d, d.Cfg, registrationInputs{Moniker: "myval", KeyName: "mykey"}, "1500000000000000000", "0.10", "")
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -296,7 +296,7 @@ func TestRunRegisterValidatorWithDeps_RegistrationError_ValidatorAlreadyExists(t
 	})
 
 	// "validator already exist" is now treated as success (validator is already registered)
-	err := runRegisterValidatorWithDeps(d, d.Cfg, "myval", "mykey", "1500000000000000000", "0.10", "")
+	err := runRegisterValidatorWithDeps(d, d.Cfg, registrationInputs{Moniker: "myval", KeyName: "mykey"}, "1500000000000000000", "0.10", "")
 	if err != nil {
 		t.Fatalf("expected nil (validator already registered treated as success), got: %v", err)
 	}
@@ -329,7 +329,7 @@ func TestRunRegisterValidatorWithDeps_RegistrationError_Text(t *testing.T) {
 		}
 	})
 
-	err := runRegisterValidatorWithDeps(d, d.Cfg, "myval", "mykey", "1500000000000000000", "0.10", "")
+	err := runRegisterValidatorWithDeps(d, d.Cfg, registrationInputs{Moniker: "myval", KeyName: "mykey"}, "1500000000000000000", "0.10", "")
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -356,7 +356,7 @@ func TestRunRegisterValidatorWithDeps_ImportKeySuccess_JSON(t *testing.T) {
 		}
 	})
 
-	err := runRegisterValidatorWithDeps(d, d.Cfg, "myval", "imported-key", "1500000000000000000", "0.10", "word1 word2 word3 word4 word5 word6 word7 word8 word9 word10 word11 word12")
+	err := runRegisterValidatorWithDeps(d, d.Cfg, registrationInputs{Moniker: "myval", KeyName: "imported-key"}, "1500000000000000000", "0.10", "word1 word2 word3 word4 word5 word6 word7 word8 word9 word10 word11 word12")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -389,7 +389,7 @@ func TestRunRegisterValidatorWithDeps_ImportKeySuccess_Text_WithMnemonic(t *test
 		}
 	})
 
-	err := runRegisterValidatorWithDeps(d, d.Cfg, "myval", "imported-key", "1500000000000000000", "0.10", "word1 word2 word3 word4 word5 word6 word7 word8 word9 word10 word11 word12")
+	err := runRegisterValidatorWithDeps(d, d.Cfg, registrationInputs{Moniker: "myval", KeyName: "imported-key"}, "1500000000000000000", "0.10", "word1 word2 word3 word4 word5 word6 word7 word8 word9 word10 word11 word12")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -426,7 +426,7 @@ func TestRunRegisterValidatorWithDeps_NewKeyWithMnemonic_Text(t *testing.T) {
 		}
 	})
 
-	err := runRegisterValidatorWithDeps(d, d.Cfg, "myval", "newkey", "1500000000000000000", "0.10", "")
+	err := runRegisterValidatorWithDeps(d, d.Cfg, registrationInputs{Moniker: "myval", KeyName: "newkey"}, "1500000000000000000", "0.10", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -459,7 +459,7 @@ func TestRunRegisterValidatorWithDeps_ExistingKey_Text(t *testing.T) {
 		}
 	})
 
-	err := runRegisterValidatorWithDeps(d, d.Cfg, "myval", "existing", "1500000000000000000", "0.10", "")
+	err := runRegisterValidatorWithDeps(d, d.Cfg, registrationInputs{Moniker: "myval", KeyName: "existing"}, "1500000000000000000", "0.10", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -487,7 +487,7 @@ func TestRunRegisterValidatorWithDeps_NodeErrors_SkipsSyncCheck(t *testing.T) {
 		}
 	})
 
-	err := runRegisterValidatorWithDeps(d, d.Cfg, "myval", "mykey", "1500000000000000000", "0.10", "")
+	err := runRegisterValidatorWithDeps(d, d.Cfg, registrationInputs{Moniker: "myval", KeyName: "mykey"}, "1500000000000000000", "0.10", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -521,7 +521,7 @@ func TestRunRegisterValidatorWithDeps_EVMAddrError(t *testing.T) {
 		}
 	})
 
-	err := runRegisterValidatorWithDeps(d, d.Cfg, "myval", "mykey", "1500000000000000000", "0.10", "")
+	err := runRegisterValidatorWithDeps(d, d.Cfg, registrationInputs{Moniker: "myval", KeyName: "mykey"}, "1500000000000000000", "0.10", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -549,7 +549,7 @@ func TestRunRegisterValidatorWithDeps_DefaultStake_JSON(t *testing.T) {
 	})
 
 	// Empty stake amount should default to registrationMinStake when in JSON mode
-	err := runRegisterValidatorWithDeps(d, d.Cfg, "myval", "mykey", "", "0.10", "")
+	err := runRegisterValidatorWithDeps(d, d.Cfg, registrationInputs{Moniker: "myval", KeyName: "mykey"}, "", "0.10", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -623,7 +623,7 @@ func TestRunRegisterValidatorWithDeps_BalanceCheckRetries(t *testing.T) {
 		RPCCheck: func(string, time.Duration) bool { return true },
 	}
 
-	err := runRegisterValidatorWithDeps(d, d.Cfg, "myval", "mykey", "1500000000000000000", "0.10", "")
+	err := runRegisterValidatorWithDeps(d, d.Cfg, registrationInputs{Moniker: "myval", KeyName: "mykey"}, "1500000000000000000", "0.10", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -653,6 +653,10 @@ func (m *balanceRetryMockValidator) Register(ctx context.Context, args validator
 
 func (m *balanceRetryMockValidator) Unjail(ctx context.Context, keyName string) (string, error) {
 	return m.inner.Unjail(ctx, keyName)
+}
+
+func (m *balanceRetryMockValidator) EditValidator(ctx context.Context, args validator.EditValidatorArgs) (string, error) {
+	return m.inner.EditValidator(ctx, args)
 }
 
 func (m *balanceRetryMockValidator) WithdrawRewards(ctx context.Context, validatorAddr string, keyName string, includeCommission bool) (string, error) {
@@ -710,7 +714,7 @@ func TestRunRegisterValidatorWithDeps_ValidatorAlreadyExists_ReturnsSuccess(t *t
 		}
 	})
 
-	err := runRegisterValidatorWithDeps(d, d.Cfg, "myval", "mykey", "1500000000000000000", "0.10", "word1 word2 word3 word4 word5 word6 word7 word8 word9 word10 word11 word12")
+	err := runRegisterValidatorWithDeps(d, d.Cfg, registrationInputs{Moniker: "myval", KeyName: "mykey"}, "1500000000000000000", "0.10", "word1 word2 word3 word4 word5 word6 word7 word8 word9 word10 word11 word12")
 	if err != nil {
 		t.Fatalf("expected nil (validator already registered treated as success), got: %v", err)
 	}
@@ -737,7 +741,7 @@ func TestRunRegisterValidatorWithDeps_ValidatorAlreadyExists_JSON(t *testing.T) 
 		}
 	})
 
-	err := runRegisterValidatorWithDeps(d, d.Cfg, "myval", "mykey", "1500000000000000000", "0.10", "word1 word2 word3 word4 word5 word6 word7 word8 word9 word10 word11 word12")
+	err := runRegisterValidatorWithDeps(d, d.Cfg, registrationInputs{Moniker: "myval", KeyName: "mykey"}, "1500000000000000000", "0.10", "word1 word2 word3 word4 word5 word6 word7 word8 word9 word10 word11 word12")
 	if err != nil {
 		t.Fatalf("expected nil (validator already registered treated as success), got: %v", err)
 	}

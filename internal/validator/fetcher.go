@@ -371,6 +371,10 @@ func (f *Fetcher) fetchMyValidator(ctx context.Context, cfg config.Config) (MyVa
 	type validatorWithPubkey struct {
 		OperatorAddress string
 		Moniker         string
+		Website         string
+		Details         string
+		SecurityContact string
+		Identity        string
 		ConsensusPubkey string
 		Status          string
 		Tokens          string
@@ -397,8 +401,12 @@ func (f *Fetcher) fetchMyValidator(ctx context.Context, cfg config.Config) (MyVa
 		var result struct {
 			Validators []struct {
 				OperatorAddress string `json:"operator_address"`
-				Description     struct {
-					Moniker string `json:"moniker"`
+				Description struct {
+					Moniker         string `json:"moniker"`
+					Website         string `json:"website"`
+					Details         string `json:"details"`
+					SecurityContact string `json:"security_contact"`
+					Identity        string `json:"identity"`
 				} `json:"description"`
 				ConsensusPubkey struct {
 					Value string `json:"value"`
@@ -425,6 +433,10 @@ func (f *Fetcher) fetchMyValidator(ctx context.Context, cfg config.Config) (MyVa
 			allValidators = append(allValidators, validatorWithPubkey{
 				OperatorAddress: v.OperatorAddress,
 				Moniker:         v.Description.Moniker,
+				Website:         v.Description.Website,
+				Details:         v.Description.Details,
+				SecurityContact: v.Description.SecurityContact,
+				Identity:        v.Description.Identity,
 				ConsensusPubkey: v.ConsensusPubkey.Value,
 				Status:          v.Status,
 				Tokens:          v.Tokens,
@@ -489,6 +501,10 @@ func (f *Fetcher) fetchMyValidator(ctx context.Context, cfg config.Config) (MyVa
 				IsValidator:                    true,
 				Address:                        v.OperatorAddress,
 				Moniker:                        v.Moniker,
+				Website:                        v.Website,
+				Details:                        v.Details,
+				SecurityContact:                v.SecurityContact,
+				Identity:                       v.Identity,
 				Status:                         status,
 				VotingPower:                    votingPower,
 				VotingPct:                      votingPct,
@@ -562,6 +578,10 @@ func (f *Fetcher) fetchMyValidator(ctx context.Context, cfg config.Config) (MyVa
 					IsValidator:                    false,
 					Address:                        v.OperatorAddress,
 					Moniker:                        v.Moniker,
+					Website:                        v.Website,
+					Details:                        v.Details,
+					SecurityContact:                v.SecurityContact,
+					Identity:                       v.Identity,
 					Status:                         status,
 					VotingPower:                    votingPower,
 					VotingPct:                      votingPct,
@@ -610,6 +630,10 @@ func (f *Fetcher) fetchMyValidator(ctx context.Context, cfg config.Config) (MyVa
 					IsValidator:                    false,
 					Address:                        v.OperatorAddress,
 					Moniker:                        v.Moniker,
+					Website:                        v.Website,
+					Details:                        v.Details,
+					SecurityContact:                v.SecurityContact,
+					Identity:                       v.Identity,
 					Status:                         status,
 					VotingPower:                    votingPower,
 					VotingPct:                      votingPct,
