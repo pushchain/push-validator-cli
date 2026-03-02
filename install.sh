@@ -221,11 +221,11 @@ download_with_progress() {
     if [[ ! -t 1 ]]; then
         if [[ $use_curl -eq 1 ]]; then
             # Get size for percentage reporting
-            total_size=$(curl -sLI "$url" 2>/dev/null | grep -i '^content-length:' | tail -1 | awk '{print $2}' | tr -d '\r\n')
+            total_size=$(curl -sLI "$url" 2>/dev/null | grep -i '^content-length:' | tail -1 | awk '{print $2}' | tr -d '\r\n' || true)
             total_size=${total_size:-0}
             curl -sL -o "$output_file" "$url" < /dev/null &
         else
-            total_size=$(wget --spider --server-response "$url" 2>&1 | grep -i 'content-length:' | tail -1 | awk '{print $2}' | tr -d '\r\n')
+            total_size=$(wget --spider --server-response "$url" 2>&1 | grep -i 'content-length:' | tail -1 | awk '{print $2}' | tr -d '\r\n' || true)
             total_size=${total_size:-0}
             wget -q -O "$output_file" "$url" < /dev/null &
         fi
@@ -243,7 +243,7 @@ download_with_progress() {
             fi
             sleep 1
         done
-        wait "$dl_pid"
+        wait "$dl_pid" || true
         return $?
     fi
 
@@ -251,9 +251,9 @@ download_with_progress() {
 
     # Get Content-Length via HEAD request (follows redirects)
     if [[ $use_curl -eq 1 ]]; then
-        total_size=$(curl -sLI "$url" 2>/dev/null | grep -i '^content-length:' | tail -1 | awk '{print $2}' | tr -d '\r\n')
+        total_size=$(curl -sLI "$url" 2>/dev/null | grep -i '^content-length:' | tail -1 | awk '{print $2}' | tr -d '\r\n' || true)
     else
-        total_size=$(wget --spider --server-response "$url" 2>&1 | grep -i 'content-length:' | tail -1 | awk '{print $2}' | tr -d '\r\n')
+        total_size=$(wget --spider --server-response "$url" 2>&1 | grep -i 'content-length:' | tail -1 | awk '{print $2}' | tr -d '\r\n' || true)
     fi
     total_size=${total_size:-0}
 
@@ -280,8 +280,8 @@ download_with_progress() {
     done
 
     # Capture exit code
-    wait "$dl_pid"
-    local dl_exit=$?
+    local dl_exit=0
+    wait "$dl_pid" || dl_exit=$?
 
     # Final frame (100% if successful)
     if [[ $dl_exit -eq 0 && -f "$output_file" ]]; then
@@ -590,6 +590,33 @@ install_go() {
     fi
 }
 
+# Install Go 1.23 to a temporary directory (for cosmovisor build with Go 1.26+ systems)
+install_temp_go() {
+    local go_version="1.23.3"
+    local temp_dir="$1"
+    local arch os download_url
+
+    case "$(uname -m)" in
+        x86_64|amd64) arch="amd64" ;;
+        aarch64|arm64) arch="arm64" ;;
+        *) return 1 ;;
+    esac
+
+    os="linux"
+    [[ "$OSTYPE" == "darwin"* ]] && os="darwin"
+
+    download_url="https://go.dev/dl/go${go_version}.${os}-${arch}.tar.gz"
+
+    mkdir -p "$temp_dir"
+    if command -v curl >/dev/null 2>&1; then
+        curl -sL "$download_url" | tar -xzf - -C "$temp_dir" 2>/dev/null
+    else
+        wget -qO- "$download_url" | tar -xzf - -C "$temp_dir" 2>/dev/null
+    fi
+
+    [[ -x "$temp_dir/go/bin/go" ]]
+}
+
 # Helper: Download pchaind binary from GitHub releases
 download_pchaind() {
     local os arch version download_url checksum_url temp_dir filename ver_num
@@ -622,7 +649,7 @@ download_pchaind() {
         step "Fetching latest release version"
         if command -v curl >/dev/null 2>&1; then
             # Only use /releases/latest (stable releases, not pre-releases)
-            version=$(curl -sL https://api.github.com/repos/pushchain/push-chain-node/releases/latest 2>/dev/null | grep '"tag_name"' | head -1 | sed 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
+            version=$(curl -sL https://api.github.com/repos/pushchain/push-chain-node/releases/latest 2>/dev/null | grep '"tag_name"' | head -1 | sed 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/' || true)
         fi
         if [[ -z "$version" ]]; then
             verbose "Could not determine latest release version (no stable release found)"
@@ -767,7 +794,7 @@ download_push_validator() {
     else
         step "Fetching latest release version"
         if command -v curl >/dev/null 2>&1; then
-            version=$(curl -sL https://api.github.com/repos/pushchain/push-validator-cli/releases/latest 2>/dev/null | grep '"tag_name"' | head -1 | sed 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
+            version=$(curl -sL https://api.github.com/repos/pushchain/push-validator-cli/releases/latest 2>/dev/null | grep '"tag_name"' | head -1 | sed 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/' || true)
         fi
         if [[ -z "$version" ]]; then
             verbose "Could not determine latest release version (no stable release found)"
@@ -811,7 +838,7 @@ download_push_validator() {
             step "Verifying checksum"
             local expected_sum actual_sum
             # Extract checksum for our specific file from checksums.txt
-            expected_sum=$(grep "$filename" "$temp_dir/checksums.txt" 2>/dev/null | awk '{print $1}')
+            expected_sum=$(grep "$filename" "$temp_dir/checksums.txt" 2>/dev/null | awk '{print $1}' || true)
             if command -v sha256sum >/dev/null 2>&1; then
                 actual_sum=$(sha256sum "$temp_dir/$filename" | awk '{print $1}')
             elif command -v shasum >/dev/null 2>&1; then
@@ -1353,7 +1380,7 @@ if [[ "$USE_LOCAL" = "yes" || -n "$LOCAL_REPO" ]]; then
   if [[ -x "$MANAGER_BIN" ]]; then
     CURRENT_COMMIT=$(cd "$REPO_DIR" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
     # Extract commit from version output (format: "push-validator vX.Y.Z (1f599bd) built ...")
-    INSTALLED_COMMIT=$("$MANAGER_BIN" version < /dev/null 2>/dev/null | sed -n 's/.*(\([0-9a-f]\{7,\}\)).*/\1/p')
+    INSTALLED_COMMIT=$("$MANAGER_BIN" version < /dev/null 2>/dev/null | sed -n 's/.*(\([0-9a-f]\{7,\}\)).*/\1/p' || true)
     # Only skip build if both are valid hex commits and match
     if [[ "$CURRENT_COMMIT" =~ ^[0-9a-f]+$ ]] && [[ "$INSTALLED_COMMIT" =~ ^[0-9a-f]+$ ]] && [[ "$CURRENT_COMMIT" == "$INSTALLED_COMMIT" ]]; then
       step "Manager already up-to-date ($CURRENT_COMMIT) - skipped"
@@ -1377,9 +1404,9 @@ if [[ "$USE_LOCAL" = "yes" || -n "$LOCAL_REPO" ]]; then
 
     # Compute and display SHA256
     if command -v sha256sum >/dev/null 2>&1; then
-      MANAGER_SHA=$(sha256sum "$MANAGER_BIN" 2>/dev/null | awk '{print $1}')
+      MANAGER_SHA=$(sha256sum "$MANAGER_BIN" 2>/dev/null | awk '{print $1}' || true)
     elif command -v shasum >/dev/null 2>&1; then
-      MANAGER_SHA=$(shasum -a 256 "$MANAGER_BIN" 2>/dev/null | awk '{print $1}')
+      MANAGER_SHA=$(shasum -a 256 "$MANAGER_BIN" 2>/dev/null | awk '{print $1}' || true)
     fi
     if [[ -n "$MANAGER_SHA" ]]; then
       SHA_SHORT="${MANAGER_SHA:0:8}...${MANAGER_SHA: -8}"
@@ -1454,10 +1481,35 @@ verbose "Using built-in WebSocket monitor (no external dependency)"
 # Install Cosmovisor for automatic upgrades (pinned to v1.7.1)
 step "Installing Cosmovisor for automatic upgrades"
 if ! command -v cosmovisor >/dev/null 2>&1; then
-  COSMOVISOR_LOG=$(mktemp /tmp/cosmovisor-install-XXXXXX.log)
-  go install cosmossdk.io/tools/cosmovisor/cmd/cosmovisor@v1.7.1 < /dev/null > "$COSMOVISOR_LOG" 2>&1 &
+  COSMOVISOR_LOG=$(mktemp /tmp/cosmovisor-install-XXXXXX 2>/dev/null || echo "/tmp/cosmovisor-install-$$.log")
+  GO_BIN_DIR="${GOBIN:-${GOPATH:-$HOME/go}/bin}"
+
+  # Check if system Go is 1.24+ (incompatible with cosmovisor due to sonic library)
+  SYSTEM_GO_MINOR=$(go version 2>/dev/null | grep -oE 'go1\.([0-9]+)' | sed 's/go1\.//' || echo "0")
+  USE_TEMP_GO=no
+  TEMP_GO_DIR=""
+
+  if [[ "$SYSTEM_GO_MINOR" -ge 24 ]]; then
+    verbose "System Go 1.${SYSTEM_GO_MINOR} detected (incompatible with cosmovisor)"
+    verbose "Downloading Go 1.23 for cosmovisor build..."
+    TEMP_GO_DIR=$(mktemp -d 2>/dev/null || echo "/tmp/temp-go-$$")
+    if install_temp_go "$TEMP_GO_DIR"; then
+      USE_TEMP_GO=yes
+      verbose "Using temporary Go 1.23 from $TEMP_GO_DIR"
+    else
+      warn "Failed to download Go 1.23, trying with system Go anyway"
+    fi
+  fi
+
+  # Run go install with appropriate Go binary
+  if [[ "$USE_TEMP_GO" = "yes" ]]; then
+    GOBIN="$GO_BIN_DIR" "$TEMP_GO_DIR/go/bin/go" install cosmossdk.io/tools/cosmovisor/cmd/cosmovisor@v1.7.1 < /dev/null > "$COSMOVISOR_LOG" 2>&1 &
+  else
+    GOBIN="$GO_BIN_DIR" go install cosmossdk.io/tools/cosmovisor/cmd/cosmovisor@v1.7.1 < /dev/null > "$COSMOVISOR_LOG" 2>&1 &
+  fi
   GO_PID=$!
-  # Show spinner while go install runs
+
+  # Show spinner while go install runs (TTY only)
   if [[ -t 1 ]]; then
     spin_chars='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
     i=0
@@ -1466,16 +1518,18 @@ if ! command -v cosmovisor >/dev/null 2>&1; then
       sleep 0.1 2>/dev/null || sleep 1
     done
     printf "\r\033[K"
-  else
-    # Non-TTY: just wait silently
-    wait "$GO_PID"
   fi
-  wait "$GO_PID" 2>/dev/null
-  GO_EXIT=$?
+
+  # Capture exit code (works for both TTY and non-TTY)
+  GO_EXIT=0
+  wait "$GO_PID" 2>/dev/null || GO_EXIT=$?
+
+  # Clean up temporary Go installation
+  [[ -n "$TEMP_GO_DIR" && -d "$TEMP_GO_DIR" ]] && rm -rf "$TEMP_GO_DIR"
+
   if [[ $GO_EXIT -eq 0 ]]; then
     rm -f "$COSMOVISOR_LOG"
     # Ensure go bin directory is in PATH for current session and future shells
-    GO_BIN_DIR="${GOBIN:-${GOPATH:-$HOME/go}/bin}"
     export PATH="$GO_BIN_DIR:$PATH"
     # Persist to shell profile if not already there
     SHELL_CONFIG="${HOME}/.bashrc"
@@ -1487,8 +1541,23 @@ if ! command -v cosmovisor >/dev/null 2>&1; then
     fi
     ok "Cosmovisor v1.7.1 installed"
   else
-    err "Cosmovisor installation failed (see $COSMOVISOR_LOG)"
-    exit 1
+    # Check if failure is due to Go compatibility issue
+    if [[ -f "$COSMOVISOR_LOG" ]] && grep -q "invalid reference to encoding/json" "$COSMOVISOR_LOG" 2>/dev/null; then
+      warn "Cosmovisor build failed (Go compatibility issue)"
+      warn "Automatic chain upgrades will not be available"
+      warn "You can install cosmovisor manually with Go 1.23"
+      rm -f "$COSMOVISOR_LOG"
+      # Continue without cosmovisor - the validator can still run
+    else
+      # Show actual error for debugging
+      if [[ -f "$COSMOVISOR_LOG" ]]; then
+        err "Cosmovisor installation failed:"
+        cat "$COSMOVISOR_LOG" | head -5
+      else
+        err "Cosmovisor installation failed (no log file)"
+      fi
+      exit 1
+    fi
   fi
 else
   ok "Cosmovisor already installed"
@@ -1660,7 +1729,7 @@ if [[ "$AUTO_START" = "yes" ]]; then
   fi
 
   # Prompt for validator registration if not already registered
-  if [[ "$INTERACTIVE" == "yes" ]] && [[ "$ALREADY_VALIDATOR" == "no" ]]; then
+  if [[ "${INTERACTIVE:-}" == "yes" ]] && [[ "${ALREADY_VALIDATOR:-}" == "no" ]]; then
     echo
     echo "Next steps to become a validator:"
     echo "1. Get test tokens from: https://faucet.push.org"
@@ -1669,10 +1738,10 @@ if [[ "$AUTO_START" = "yes" ]]; then
   fi
 
   # Guard registration prompt in non-interactive mode
-  if [[ "$ALREADY_VALIDATOR" == "yes" ]]; then
+  if [[ "${ALREADY_VALIDATOR:-}" == "yes" ]]; then
     RESP="N"
   else
-    if [[ "$INTERACTIVE" == "yes" ]]; then
+    if [[ "${INTERACTIVE:-}" == "yes" ]]; then
       if [[ -e /dev/tty ]]; then
         read -r -p "Register as a validator now? (y/N) " RESP < /dev/tty 2> /dev/tty || true
       else
@@ -1698,7 +1767,7 @@ if [[ "$AUTO_START" = "yes" ]]; then
       # Ensure clean separation before summary
       echo
       # Only mark as skipped if user declined and was not already a validator
-      if [[ "$ALREADY_VALIDATOR" != "yes" ]]; then
+      if [[ "${ALREADY_VALIDATOR:-}" != "yes" ]]; then
         REGISTRATION_STATUS="skipped"
       fi
       ;;
@@ -1733,15 +1802,15 @@ else
   STATUS_JSON=$("$MANAGER_BIN" status --output json < /dev/null 2>/dev/null || echo "{}")
 fi
 if command -v jq >/dev/null 2>&1; then
-  NETWORK=$(echo "$STATUS_JSON" | jq -r '.network // .node.network // empty' 2>/dev/null)
-  MONIKER=$(echo "$STATUS_JSON" | jq -r '.moniker // .node.moniker // empty' 2>/dev/null)
-  SYNCED=$(echo "$STATUS_JSON" | jq -r '.synced // .node.synced // empty' 2>/dev/null)
-  PEERS=$(echo "$STATUS_JSON" | jq -r '.peers // .node.peers // empty' 2>/dev/null)
+  NETWORK=$(echo "$STATUS_JSON" | jq -r '.network // .node.network // empty' 2>/dev/null || true)
+  MONIKER=$(echo "$STATUS_JSON" | jq -r '.moniker // .node.moniker // empty' 2>/dev/null || true)
+  SYNCED=$(echo "$STATUS_JSON" | jq -r '.synced // .node.synced // empty' 2>/dev/null || true)
+  PEERS=$(echo "$STATUS_JSON" | jq -r '.peers // .node.peers // empty' 2>/dev/null || true)
 else
-  NETWORK=$(echo "$STATUS_JSON" | grep -o '"network"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*"network"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
-  MONIKER=$(echo "$STATUS_JSON" | grep -o '"moniker"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*"moniker"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
-  SYNCED=$(echo "$STATUS_JSON" | grep -o '"synced"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*"synced"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
-  PEERS=$(echo "$STATUS_JSON" | grep -o '"peers"[[:space:]]*:[[:space:]]*[0-9]*' | sed 's/.*"peers"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/')
+  NETWORK=$(echo "$STATUS_JSON" | grep -o '"network"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*"network"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/' || true)
+  MONIKER=$(echo "$STATUS_JSON" | grep -o '"moniker"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*"moniker"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/' || true)
+  SYNCED=$(echo "$STATUS_JSON" | grep -o '"synced"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*"synced"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/' || true)
+  PEERS=$(echo "$STATUS_JSON" | grep -o '"peers"[[:space:]]*:[[:space:]]*[0-9]*' | sed 's/.*"peers"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/' || true)
 fi
 
 # Determine node status indicator
@@ -1751,7 +1820,7 @@ if [[ "$SYNCED" == "true" ]]; then
 fi
 
 VALIDATOR_STATUS_ICON="❌"
-if [[ "$ALREADY_VALIDATOR" == "yes" ]]; then
+if [[ "${ALREADY_VALIDATOR:-}" == "yes" ]]; then
   VALIDATOR_STATUS_ICON="✅"
 fi
 
@@ -1769,7 +1838,7 @@ echo
 echo "  📊 Node Status"
 echo "     $NODE_STATUS_ICON Synced"
 echo "     🌐 Peers:   $PEERS"
-if [[ "$ALREADY_VALIDATOR" == "yes" ]]; then
+if [[ "${ALREADY_VALIDATOR:-}" == "yes" ]]; then
   echo "     $VALIDATOR_STATUS_ICON Validator Registered"
 fi
 echo
@@ -1793,13 +1862,13 @@ echo "     • View dashboard:  push-validator dashboard"
 echo "     • View logs:       push-validator logs"
 echo "     • Stop node:       push-validator stop"
 echo "     • Restart node:    push-validator restart"
-if [[ "$ALREADY_VALIDATOR" == "no" ]]; then
+if [[ "${ALREADY_VALIDATOR:-}" == "no" ]]; then
   echo "     • Register:        push-validator register-validator"
 fi
 echo "     • All commands:    push-validator help"
 echo
 
-if [[ "$INTERACTIVE" == "yes" ]]; then
+if [[ "${INTERACTIVE:-}" == "yes" ]]; then
   # Interactive mode: show registration action status and pause before dashboard
   echo
   case "$REGISTRATION_STATUS" in

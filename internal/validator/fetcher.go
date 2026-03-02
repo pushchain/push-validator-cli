@@ -218,7 +218,29 @@ func (f *Fetcher) GetMyValidator(ctx context.Context, cfg config.Config) (MyVali
 	return myVal, nil
 }
 
-// fetchAllValidators queries all validators from the network
+// validatorQueryResult is the response structure from staking validators query
+type validatorQueryResult struct {
+	Validators []struct {
+		Description struct {
+			Moniker string `json:"moniker"`
+		} `json:"description"`
+		OperatorAddress string `json:"operator_address"`
+		Status          string `json:"status"`
+		Tokens          string `json:"tokens"`
+		Commission      struct {
+			CommissionRates struct {
+				Rate string `json:"rate"`
+			} `json:"commission_rates"`
+		} `json:"commission"`
+		Jailed bool `json:"jailed"`
+	} `json:"validators"`
+	Pagination struct {
+		NextKey string `json:"next_key"`
+		Total   string `json:"total"`
+	} `json:"pagination"`
+}
+
+// fetchAllValidators queries all validators from the network with pagination
 func (f *Fetcher) fetchAllValidators(ctx context.Context, cfg config.Config) (ValidatorList, error) {
 	bin, err := resolvePchaindBin(cfg.HomeDir)
 	if err != nil {
@@ -226,73 +248,76 @@ func (f *Fetcher) fetchAllValidators(ctx context.Context, cfg config.Config) (Va
 	}
 
 	remote := fmt.Sprintf("https://%s", cfg.GenesisDomain)
-	cmd := commandContext(ctx, bin, "query", "staking", "validators", "--node", remote, "-o", "json")
-	output, err := cmd.Output()
-	if err != nil {
-		return ValidatorList{}, fmt.Errorf("query validators failed: %w", err)
-	}
 
-	var result struct {
-		Validators []struct {
-			Description struct {
-				Moniker string `json:"moniker"`
-			} `json:"description"`
-			OperatorAddress string `json:"operator_address"`
-			Status          string `json:"status"`
-			Tokens          string `json:"tokens"`
-			Commission      struct {
-				CommissionRates struct {
-					Rate string `json:"rate"`
-				} `json:"commission_rates"`
-			} `json:"commission"`
-			Jailed bool `json:"jailed"`
-		} `json:"validators"`
-	}
+	// Fetch all validators using pagination
+	var allValidators []ValidatorInfo
+	pageKey := ""
+	const pageLimit = "500" // Fetch up to 500 per page
 
-	if err := json.Unmarshal(output, &result); err != nil {
-		return ValidatorList{}, fmt.Errorf("parse validators failed: %w", err)
-	}
-
-	validators := make([]ValidatorInfo, 0, len(result.Validators))
-	for _, v := range result.Validators {
-		moniker := v.Description.Moniker
-		if moniker == "" {
-			moniker = "unknown"
+	for {
+		args := []string{"query", "staking", "validators", "--node", remote, "-o", "json", "--page-limit", pageLimit}
+		if pageKey != "" {
+			args = append(args, "--page-key", pageKey)
 		}
 
-		status := parseStatus(v.Status)
+		cmd := commandContext(ctx, bin, args...)
+		output, err := cmd.Output()
+		if err != nil {
+			return ValidatorList{}, fmt.Errorf("query validators failed: %w", err)
+		}
 
-		var votingPower int64
-		if v.Tokens != "" {
-			if tokens, err := strconv.ParseFloat(v.Tokens, 64); err == nil {
-				votingPower = int64(tokens / 1e18)
+		var result validatorQueryResult
+		if err := json.Unmarshal(output, &result); err != nil {
+			return ValidatorList{}, fmt.Errorf("parse validators failed: %w", err)
+		}
+
+		// Process validators from this page
+		for _, v := range result.Validators {
+			moniker := v.Description.Moniker
+			if moniker == "" {
+				moniker = "unknown"
 			}
-		}
 
-		commission := "0%"
-		if v.Commission.CommissionRates.Rate != "" {
-			if rate, err := strconv.ParseFloat(v.Commission.CommissionRates.Rate, 64); err == nil {
-				if rate > 1 {
-					rate = rate / 1e18
+			status := parseStatus(v.Status)
+
+			var votingPower int64
+			if v.Tokens != "" {
+				if tokens, err := strconv.ParseFloat(v.Tokens, 64); err == nil {
+					votingPower = int64(tokens / 1e18)
 				}
-				commission = fmt.Sprintf("%.0f%%", rate*100)
 			}
+
+			commission := "0%"
+			if v.Commission.CommissionRates.Rate != "" {
+				if rate, err := strconv.ParseFloat(v.Commission.CommissionRates.Rate, 64); err == nil {
+					if rate > 1 {
+						rate = rate / 1e18
+					}
+					commission = fmt.Sprintf("%.0f%%", rate*100)
+				}
+			}
+
+			allValidators = append(allValidators, ValidatorInfo{
+				OperatorAddress: v.OperatorAddress,
+				Moniker:         moniker,
+				Status:          status,
+				Tokens:          v.Tokens,
+				VotingPower:     votingPower,
+				Commission:      commission,
+				Jailed:          v.Jailed,
+			})
 		}
 
-		validators = append(validators, ValidatorInfo{
-			OperatorAddress: v.OperatorAddress,
-			Moniker:         moniker,
-			Status:          status,
-			Tokens:          v.Tokens,
-			VotingPower:     votingPower,
-			Commission:      commission,
-			Jailed:          v.Jailed,
-		})
+		// Check if there are more pages
+		if result.Pagination.NextKey == "" {
+			break
+		}
+		pageKey = result.Pagination.NextKey
 	}
 
 	return ValidatorList{
-		Validators: validators,
-		Total:      len(validators),
+		Validators: allValidators,
+		Total:      len(allValidators),
 	}, nil
 }
 
@@ -340,41 +365,83 @@ func (f *Fetcher) fetchMyValidator(ctx context.Context, cfg config.Config) (MyVa
 		}
 	}
 
-	// Fetch all validators to match by consensus pubkey
+	// Fetch all validators to match by consensus pubkey (with pagination)
 	remote := fmt.Sprintf("https://%s", cfg.GenesisDomain)
-	queryCmd := commandContext(ctx, bin, "query", "staking", "validators", "--node", remote, "-o", "json")
-	valsOutput, err := queryCmd.Output()
-	if err != nil {
-		return MyValidatorInfo{IsValidator: false}, err
+
+	type validatorWithPubkey struct {
+		OperatorAddress string
+		Moniker         string
+		ConsensusPubkey string
+		Status          string
+		Tokens          string
+		CommissionRate  string
+		Jailed          bool
 	}
 
-	var result struct {
-		Validators []struct {
-			OperatorAddress string `json:"operator_address"`
-			Description     struct {
-				Moniker string `json:"moniker"`
-			} `json:"description"`
-			ConsensusPubkey struct {
-				Value string `json:"value"` // The base64 pubkey
-			} `json:"consensus_pubkey"`
-			Status     string `json:"status"`
-			Tokens     string `json:"tokens"`
-			Commission struct {
-				CommissionRates struct {
-					Rate string `json:"rate"`
-				} `json:"commission_rates"`
-			} `json:"commission"`
-			Jailed bool `json:"jailed"`
-		} `json:"validators"`
-	}
+	var allValidators []validatorWithPubkey
+	pageKey := ""
+	const pageLimit = "500"
 
-	if err := json.Unmarshal(valsOutput, &result); err != nil {
-		return MyValidatorInfo{IsValidator: false}, err
+	for {
+		args := []string{"query", "staking", "validators", "--node", remote, "-o", "json", "--page-limit", pageLimit}
+		if pageKey != "" {
+			args = append(args, "--page-key", pageKey)
+		}
+
+		queryCmd := commandContext(ctx, bin, args...)
+		valsOutput, err := queryCmd.Output()
+		if err != nil {
+			return MyValidatorInfo{IsValidator: false}, err
+		}
+
+		var result struct {
+			Validators []struct {
+				OperatorAddress string `json:"operator_address"`
+				Description     struct {
+					Moniker string `json:"moniker"`
+				} `json:"description"`
+				ConsensusPubkey struct {
+					Value string `json:"value"`
+				} `json:"consensus_pubkey"`
+				Status     string `json:"status"`
+				Tokens     string `json:"tokens"`
+				Commission struct {
+					CommissionRates struct {
+						Rate string `json:"rate"`
+					} `json:"commission_rates"`
+				} `json:"commission"`
+				Jailed bool `json:"jailed"`
+			} `json:"validators"`
+			Pagination struct {
+				NextKey string `json:"next_key"`
+			} `json:"pagination"`
+		}
+
+		if err := json.Unmarshal(valsOutput, &result); err != nil {
+			return MyValidatorInfo{IsValidator: false}, err
+		}
+
+		for _, v := range result.Validators {
+			allValidators = append(allValidators, validatorWithPubkey{
+				OperatorAddress: v.OperatorAddress,
+				Moniker:         v.Description.Moniker,
+				ConsensusPubkey: v.ConsensusPubkey.Value,
+				Status:          v.Status,
+				Tokens:          v.Tokens,
+				CommissionRate:  v.Commission.CommissionRates.Rate,
+				Jailed:          v.Jailed,
+			})
+		}
+
+		if result.Pagination.NextKey == "" {
+			break
+		}
+		pageKey = result.Pagination.NextKey
 	}
 
 	// Calculate total voting power
 	var totalVotingPower int64
-	for _, v := range result.Validators {
+	for _, v := range allValidators {
 		if v.Tokens != "" {
 			if tokens, err := strconv.ParseFloat(v.Tokens, 64); err == nil {
 				totalVotingPower += int64(tokens / 1e18)
@@ -384,15 +451,15 @@ func (f *Fetcher) fetchMyValidator(ctx context.Context, cfg config.Config) (MyVa
 
 	// Try to find validator by matching consensus pubkey
 	var monikerConflict string
-	for _, v := range result.Validators {
+	for _, v := range allValidators {
 		// Check for moniker conflicts (different validator, same moniker)
-		if localMoniker != "" && v.Description.Moniker == localMoniker &&
-		   !strings.EqualFold(v.ConsensusPubkey.Value, localPubkey.Key) {
+		if localMoniker != "" && v.Moniker == localMoniker &&
+			!strings.EqualFold(v.ConsensusPubkey, localPubkey.Key) {
 			monikerConflict = localMoniker
 		}
 
 		// Check if this validator matches our consensus pubkey
-		if strings.EqualFold(v.ConsensusPubkey.Value, localPubkey.Key) {
+		if strings.EqualFold(v.ConsensusPubkey, localPubkey.Key) {
 			// Found our validator!
 			status := parseStatus(v.Status)
 
@@ -409,8 +476,8 @@ func (f *Fetcher) fetchMyValidator(ctx context.Context, cfg config.Config) (MyVa
 			}
 
 			commission := "0%"
-			if v.Commission.CommissionRates.Rate != "" {
-				if rate, err := strconv.ParseFloat(v.Commission.CommissionRates.Rate, 64); err == nil {
+			if v.CommissionRate != "" {
+				if rate, err := strconv.ParseFloat(v.CommissionRate, 64); err == nil {
 					if rate > 1 {
 						rate = rate / 1e18
 					}
@@ -419,16 +486,16 @@ func (f *Fetcher) fetchMyValidator(ctx context.Context, cfg config.Config) (MyVa
 			}
 
 			info := MyValidatorInfo{
-				IsValidator:                  true,
-				Address:                      v.OperatorAddress,
-				Moniker:                      v.Description.Moniker,
-				Status:                       status,
-				VotingPower:                  votingPower,
-				VotingPct:                    votingPct,
-				Commission:                   commission,
-				Jailed:                       v.Jailed,
+				IsValidator:                    true,
+				Address:                        v.OperatorAddress,
+				Moniker:                        v.Moniker,
+				Status:                         status,
+				VotingPower:                    votingPower,
+				VotingPct:                      votingPct,
+				Commission:                     commission,
+				Jailed:                         v.Jailed,
 				ValidatorExistsWithSameMoniker: monikerConflict != "",
-				ConflictingMoniker:            monikerConflict,
+				ConflictingMoniker:             monikerConflict,
 			}
 
 			// If jailed, fetch slashing info with timeout (10s)
@@ -452,7 +519,7 @@ func (f *Fetcher) fetchMyValidator(ctx context.Context, cfg config.Config) (MyVa
 	// (validator may have been created with a key in the local keyring)
 	keyringAddrs := getKeyringAddresses(bin, cfg)
 	for _, keyAddr := range keyringAddrs {
-		for _, v := range result.Validators {
+		for _, v := range allValidators {
 			// Check if validator's operator address matches a key in the keyring
 			// Compare bech32 data without the 6-char checksum (differs between prefixes)
 			cosmosPrefix := "push1"
@@ -480,8 +547,8 @@ func (f *Fetcher) fetchMyValidator(ctx context.Context, cfg config.Config) (MyVa
 				}
 
 				commission := "0%"
-				if v.Commission.CommissionRates.Rate != "" {
-					if rate, err := strconv.ParseFloat(v.Commission.CommissionRates.Rate, 64); err == nil {
+				if v.CommissionRate != "" {
+					if rate, err := strconv.ParseFloat(v.CommissionRate, 64); err == nil {
 						if rate > 1 {
 							rate = rate / 1e18
 						}
@@ -494,14 +561,14 @@ func (f *Fetcher) fetchMyValidator(ctx context.Context, cfg config.Config) (MyVa
 				return MyValidatorInfo{
 					IsValidator:                    false,
 					Address:                        v.OperatorAddress,
-					Moniker:                        v.Description.Moniker,
+					Moniker:                        v.Moniker,
 					Status:                         status,
 					VotingPower:                    votingPower,
 					VotingPct:                      votingPct,
 					Commission:                     commission,
 					Jailed:                         v.Jailed,
 					ValidatorExistsWithSameMoniker: false,
-					ConflictingMoniker:            "",
+					ConflictingMoniker:             "",
 				}, nil
 			}
 		}
@@ -510,8 +577,8 @@ func (f *Fetcher) fetchMyValidator(ctx context.Context, cfg config.Config) (MyVa
 	// Not matched by consensus pubkey, check for moniker-based match
 	// (validator may have been created with different key/node)
 	if localMoniker != "" {
-		for _, v := range result.Validators {
-			if v.Description.Moniker == localMoniker {
+		for _, v := range allValidators {
+			if v.Moniker == localMoniker {
 				// Found validator by moniker but consensus pubkey doesn't match
 				status := parseStatus(v.Status)
 
@@ -528,8 +595,8 @@ func (f *Fetcher) fetchMyValidator(ctx context.Context, cfg config.Config) (MyVa
 				}
 
 				commission := "0%"
-				if v.Commission.CommissionRates.Rate != "" {
-					if rate, err := strconv.ParseFloat(v.Commission.CommissionRates.Rate, 64); err == nil {
+				if v.CommissionRate != "" {
+					if rate, err := strconv.ParseFloat(v.CommissionRate, 64); err == nil {
 						if rate > 1 {
 							rate = rate / 1e18
 						}
@@ -542,14 +609,14 @@ func (f *Fetcher) fetchMyValidator(ctx context.Context, cfg config.Config) (MyVa
 				return MyValidatorInfo{
 					IsValidator:                    false,
 					Address:                        v.OperatorAddress,
-					Moniker:                        v.Description.Moniker,
+					Moniker:                        v.Moniker,
 					Status:                         status,
 					VotingPower:                    votingPower,
 					VotingPct:                      votingPct,
 					Commission:                     commission,
 					Jailed:                         v.Jailed,
 					ValidatorExistsWithSameMoniker: false,
-					ConflictingMoniker:            "",
+					ConflictingMoniker:             "",
 				}, nil
 			}
 		}
