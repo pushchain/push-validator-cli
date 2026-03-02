@@ -463,3 +463,50 @@ func TestCollectRegistrationInputs_KeyExists_NewNameAlsoExists(t *testing.T) {
 		t.Errorf("expected empty mnemonic, got %s", result.ImportMnemonic)
 	}
 }
+
+func TestCollectRegistrationInputs_WithDescriptionFields(t *testing.T) {
+	origNoColor := flagNoColor
+	origNoEmoji := flagNoEmoji
+	defer func() {
+		flagNoColor = origNoColor
+		flagNoEmoji = origNoEmoji
+	}()
+	flagNoColor = true
+	flagNoEmoji = true
+
+	d := registerDeps()
+	defaults := registrationInputs{
+		Moniker:        "my-validator",
+		KeyName:        "my-key",
+		CommissionRate: "0.10",
+	}
+
+	// Response 0: wallet choice → "" (default = create new)
+	// Response 1: key name prompt → "" (use default)
+	// Moniker prompt is skipped (moniker is not empty/"push-validator")
+	// Response 2: website
+	// Response 3: details
+	// Response 4: security
+	// Response 5: identity
+	d.Prompter = &mockPrompter{
+		responses:   []string{"", "", "https://example.com", "my validator description", "sec@example.com", "ABCD1234ABCD1234"},
+		interactive: true,
+	}
+
+	result, err := collectRegistrationInputs(d, defaults)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Website != "https://example.com" {
+		t.Errorf("expected website https://example.com, got %s", result.Website)
+	}
+	if result.Details != "my validator description" {
+		t.Errorf("expected details 'my validator description', got %s", result.Details)
+	}
+	if result.Security != "sec@example.com" {
+		t.Errorf("expected security sec@example.com, got %s", result.Security)
+	}
+	if result.Identity != "ABCD1234ABCD1234" {
+		t.Errorf("expected identity ABCD1234ABCD1234, got %s", result.Identity)
+	}
+}
