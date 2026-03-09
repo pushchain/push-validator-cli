@@ -168,7 +168,7 @@ func TestHandleEditValidator_EditValidatorFails(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if !containsSubstr(err.Error(), "edit validator failed") {
+	if !containsSubstr(err.Error(), "update details failed") {
 		t.Errorf("unexpected error: %v", err)
 	}
 }
@@ -188,7 +188,7 @@ func TestHandleEditValidator_EditValidatorFails_JSON(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if !containsSubstr(err.Error(), "edit validator failed") {
+	if !containsSubstr(err.Error(), "update details failed") {
 		t.Errorf("unexpected error: %v", err)
 	}
 }
@@ -218,7 +218,7 @@ func TestHandleEditValidator_EditValidatorFails_Text(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if !containsSubstr(err.Error(), "edit validator failed") {
+	if !containsSubstr(err.Error(), "update details failed") {
 		t.Errorf("unexpected error: %v", err)
 	}
 }

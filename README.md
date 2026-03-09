@@ -68,6 +68,7 @@ push-validator logs                 # View logs
 
 ### Validator Operations
 ```bash
+push-validator update-details       # Update validator profile (moniker, website, identity, etc.)
 push-validator increase-stake       # Increase validator stake and voting power
 push-validator unjail               # Restore jailed validator to active status
 push-validator withdraw-rewards     # Withdraw validator rewards and commission
@@ -105,6 +106,10 @@ push-validator update          # Update CLI to latest version
 - **Smart Detection**: Monitors for sync stalls and network issues
 - **Reliable Snapshots**: Uses trusted RPC nodes for recovery
 - **Multiple Outputs**: JSON, YAML, or text format support
+- **Automatic Peer Refresh**: Background cron job discovers and updates peers every minute
+- **Resumable Downloads**: Snapshot downloads resume from where they left off on interruption
+- **Streaming Checksum Verification**: SHA-256 computed during download — no re-read needed
+- **Disk Space Pre-checks**: Validates free space before snapshot download and extraction
 
 ## 🔄 Automatic Upgrades (Cosmovisor)
 

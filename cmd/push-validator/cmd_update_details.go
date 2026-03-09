@@ -9,11 +9,11 @@ import (
 	"github.com/pushchain/push-validator-cli/internal/validator"
 )
 
-// handleEditValidator orchestrates editing a validator's profile fields:
+// handleEditValidator orchestrates updating a validator's profile details:
 // - verify node is running and validator is registered
 // - auto-derive key name
 // - prompt for fields to update
-// - submit edit-validator transaction
+// - submit update-details transaction
 func handleEditValidator(d *Deps) error {
 	if err := checkNodeRunning(d.Sup); err != nil {
 		return err
@@ -85,7 +85,7 @@ func handleEditValidator(d *Deps) error {
 	// Step 3: Prompt for fields
 	if flagOutput != "json" {
 		fmt.Println()
-		p.Section("Edit Validator Profile")
+		p.Section("Update Validator Details")
 		fmt.Println()
 		if myVal.Moniker != "" {
 			fmt.Printf("  Current moniker:          %s\n", p.Colors.Apply(p.Colors.Theme.Value, myVal.Moniker))
@@ -172,7 +172,7 @@ func handleEditValidator(d *Deps) error {
 	// Step 4: Submit transaction
 	if flagOutput != "json" {
 		fmt.Println()
-		fmt.Print(p.Colors.Apply(p.Colors.Theme.Prompt, p.Colors.Emoji("📤")+" Submitting edit-validator transaction..."))
+		fmt.Print(p.Colors.Apply(p.Colors.Theme.Prompt, p.Colors.Emoji("📤")+" Submitting update-details transaction..."))
 	}
 
 	txCtx, txCancel := context.WithTimeout(context.Background(), 90*time.Second)
@@ -184,12 +184,12 @@ func handleEditValidator(d *Deps) error {
 			getPrinter().JSON(map[string]any{"ok": false, "error": err.Error()})
 		} else {
 			fmt.Println()
-			fmt.Println(p.Colors.Error(p.Colors.Emoji("❌") + " Edit validator failed"))
+			fmt.Println(p.Colors.Error(p.Colors.Emoji("❌") + " Update details failed"))
 			fmt.Println()
 			fmt.Printf("Error: %v\n", err)
 			fmt.Println()
 		}
-		return fmt.Errorf("edit validator failed: %w", err)
+		return fmt.Errorf("update details failed: %w", err)
 	}
 
 	if flagOutput != "json" {
