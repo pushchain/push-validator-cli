@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/pushchain/push-validator-cli/internal/snapshot"
@@ -243,5 +244,25 @@ func TestShowDashboardPromptWith_Interactive_DashboardError(t *testing.T) {
 	showDashboardPromptWith(cfg, &p, prompter, runner)
 	if !runner.called {
 		t.Error("dashboard runner should be called")
+	}
+}
+
+func TestReadLogTail_LimitsLines(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "cosmovisor.log")
+	content := "one\ntwo\nthree\nfour\n"
+	if err := os.WriteFile(logPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := readLogTail(logPath, 2)
+	if got != "three\nfour" {
+		t.Fatalf("readLogTail() = %q, want %q", got, "three\nfour")
+	}
+}
+
+func TestReadLogTail_MissingFile(t *testing.T) {
+	got := readLogTail(filepath.Join(t.TempDir(), "missing.log"), 5)
+	if got != "" {
+		t.Fatalf("readLogTail() = %q, want empty string", got)
 	}
 }

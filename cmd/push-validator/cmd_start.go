@@ -127,7 +127,7 @@ var startCmd = &cobra.Command{
 			// Ensure priv_validator_state.json exists after extraction
 			pvsPath := filepath.Join(cfg.HomeDir, "data", "priv_validator_state.json")
 			if _, err := os.Stat(pvsPath); os.IsNotExist(err) {
-				_ = os.WriteFile(pvsPath, []byte(`{"height":"0","round":0,"step":0}` + "\n"), 0o644)
+				_ = os.WriteFile(pvsPath, []byte(`{"height":"0","round":0,"step":0}`+"\n"), 0o644)
 			}
 			if flagOutput != "json" {
 				fmt.Println()
@@ -224,16 +224,7 @@ var startCmd = &cobra.Command{
 		}
 		if !nodeAlive {
 			logPath := sup.LogPath()
-			// Read last few lines from log for diagnostics
-			logTail := ""
-			if b, err := os.ReadFile(logPath); err == nil {
-				lines := strings.Split(strings.TrimSpace(string(b)), "\n")
-				start := len(lines) - 5
-				if start < 0 {
-					start = 0
-				}
-				logTail = strings.Join(lines[start:], "\n")
-			}
+			logTail := readLogTail(logPath, 5)
 			ui.PrintError(ui.ErrorMessage{
 				Problem: "Node is not running",
 				Causes: []string{
@@ -485,9 +476,18 @@ func handlePostStartFlow(cfg config.Config, p *ui.Printer) bool {
 			ResetFunc:  resetFunc,
 		})
 		if syncErr != nil {
-			// Sync failed - show warning and dashboard
+			// Sync failed. If the process or RPC is down, launching the
+			// dashboard is misleading because it cannot connect either.
 			fmt.Println()
 			fmt.Println(p.Colors.Warning("  " + p.Colors.Emoji("⚠") + " Sync failed: " + syncErr.Error()))
+			if !sup.IsRunning() {
+				printNodeUnavailableAfterSyncFailure(p, sup, "Node process stopped during sync")
+				return false
+			}
+			if !process.IsRPCListening("127.0.0.1:26657", 800*time.Millisecond) {
+				printNodeUnavailableAfterSyncFailure(p, sup, "Node process is running but RPC is not listening on 127.0.0.1:26657")
+				return false
+			}
 			fmt.Println(p.Colors.Apply(p.Colors.Theme.Description, "    Try: push-validator reset && push-validator start"))
 			showDashboardPrompt(cfg, p)
 			return false
@@ -670,6 +670,37 @@ func computePostStartDecision(valResult valCheckResult, isInteractive bool) post
 		return actionShowSteps
 	}
 	return actionPromptRegister
+}
+
+func printNodeUnavailableAfterSyncFailure(p *ui.Printer, sup process.Supervisor, reason string) {
+	logPath := sup.LogPath()
+	fmt.Println(p.Colors.Error("  " + reason))
+	fmt.Println(p.Colors.Apply(p.Colors.Theme.Description, "    Check logs: cat "+logPath))
+	fmt.Println(p.Colors.Apply(p.Colors.Theme.Description, "    Try: push-validator reset && push-validator start"))
+
+	if logTail := readLogTail(logPath, 8); logTail != "" {
+		fmt.Println()
+		fmt.Println("  Last log lines:")
+		for _, line := range strings.Split(logTail, "\n") {
+			fmt.Println("    " + line)
+		}
+	}
+}
+
+func readLogTail(path string, maxLines int) string {
+	if maxLines <= 0 {
+		maxLines = 5
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	lines := strings.Split(strings.TrimSpace(string(b)), "\n")
+	start := len(lines) - maxLines
+	if start < 0 {
+		start = 0
+	}
+	return strings.Join(lines[start:], "\n")
 }
 
 // showDashboardPromptWith is a testable version that uses a Prompter and DashboardRunner.
